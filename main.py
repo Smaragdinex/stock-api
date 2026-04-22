@@ -25,6 +25,20 @@ def _safe_float(value):
         return None
 
 
+def normalize_symbol(symbol: str) -> str:
+    symbol = symbol.strip().upper()
+
+    # 已經有市場尾碼就直接用
+    if "." in symbol:
+        return symbol
+
+    # 純數字預設視為台灣上市股票
+    if symbol.isdigit():
+        return f"{symbol}.TW"
+
+    return symbol
+
+
 def _normalize_session(market_state):
     if not market_state:
         return None
@@ -45,6 +59,7 @@ def _infer_session_from_time(has_pre_price, has_post_price):
     regular_start = 9 * 60 + 30
     regular_end = 16 * 60
     post_end = 20 * 60
+
     if pre_start <= current_minutes < regular_start and has_pre_price:
         return "pre"
     if regular_end < current_minutes <= post_end and has_post_price:
@@ -61,8 +76,8 @@ def _company_snapshot(ticker):
     company_name = info.get("longName") or info.get("shortName") or info.get("displayName")
     market_cap = _safe_float(info.get("marketCap") or fast_info.get("marketCap"))
     open_price = _safe_float(info.get("open") or fast_info.get("open"))
-    fifty_two_week_high = _safe_float(info.get("fiftyTwoWeekHigh") or fast_info.get("yearHigh"))
-    fifty_two_week_low = _safe_float(info.get("fiftyTwoWeekLow") or fast_info.get("yearLow"))
+    fifty_two_week_high = _safe_float(info.get("fiftyTwoWeekHigh") or info.get("yearHigh"))
+    fifty_two_week_low = _safe_float(info.get("fiftyTwoWeekLow") or info.get("yearLow"))
     eps = _safe_float(info.get("trailingEps") or info.get("epsTrailingTwelveMonths"))
     pe_ratio = _safe_float(info.get("trailingPE") or info.get("forwardPE"))
 
@@ -99,7 +114,7 @@ def _load_tw_stocks():
     if not TW_STOCKS_PATH.exists():
         return []
     try:
-        return json.loads(TW_STOCKS_PATH.read_text())
+        return json.loads(TW_STOCKS_PATH.read_text(encoding="utf-8"))
     except Exception:
         return []
 
@@ -111,11 +126,13 @@ def _search_tw_stocks(query: str, limit: int):
 
     stocks = _load_tw_stocks()
     results = []
+
     for item in stocks:
         symbol = str(item.get("symbol", ""))
         name = str(item.get("name", ""))
         exchange = item.get("exchange", "TWSE")
         quote_type = item.get("type", "EQUITY")
+
         haystacks = [symbol.lower(), name.lower()]
         if any(normalized in hay for hay in haystacks):
             results.append({
@@ -124,26 +141,33 @@ def _search_tw_stocks(query: str, limit: int):
                 "exchange": exchange,
                 "type": quote_type,
             })
+
         if len(results) >= limit:
             break
+
     return results
 
 
 def _compute_rsi(closes, period=14):
     if len(closes) <= period:
         return None
+
     series = pd.Series(closes, dtype=float)
     delta = series.diff()
     gain = delta.clip(lower=0)
     loss = -delta.clip(upper=0)
+
     avg_gain = gain.rolling(window=period).mean()
     avg_loss = loss.rolling(window=period).mean()
+
     last_gain = avg_gain.iloc[-1]
     last_loss = avg_loss.iloc[-1]
+
     if pd.isna(last_gain) or pd.isna(last_loss):
         return None
     if last_loss == 0:
         return 100.0
+
     rs = last_gain / last_loss
     return round(100 - (100 / (1 + rs)), 2)
 
@@ -151,23 +175,29 @@ def _compute_rsi(closes, period=14):
 def _compute_mfi(highs, lows, closes, volumes, period=14):
     if min(len(highs), len(lows), len(closes), len(volumes)) <= period:
         return None
+
     df = pd.DataFrame({
         "high": pd.Series(highs, dtype=float),
         "low": pd.Series(lows, dtype=float),
         "close": pd.Series(closes, dtype=float),
         "volume": pd.Series(volumes, dtype=float),
     })
+
     typical = (df["high"] + df["low"] + df["close"]) / 3
     money_flow = typical * df["volume"]
     direction = typical.diff()
+
     positive_flow = money_flow.where(direction > 0, 0.0)
     negative_flow = money_flow.where(direction < 0, 0.0).abs()
+
     pos_sum = positive_flow.rolling(window=period).sum().iloc[-1]
     neg_sum = negative_flow.rolling(window=period).sum().iloc[-1]
+
     if pd.isna(pos_sum) or pd.isna(neg_sum):
         return None
     if neg_sum == 0:
         return 100.0
+
     mfr = pos_sum / neg_sum
     return round(100 - (100 / (1 + mfr)), 2)
 
@@ -201,6 +231,7 @@ def search_symbols(q: str = Query(..., min_length=1), limit: int = Query(8, ge=1
         seen = set()
         results = []
 
+        # 中文或純數字時，先查本地台股清單
         if _contains_chinese(q) or q.strip().isdigit():
             for item in _search_tw_stocks(q, limit):
                 symbol = item["symbol"]
@@ -209,17 +240,22 @@ def search_symbols(q: str = Query(..., min_length=1), limit: int = Query(8, ge=1
                 seen.add(symbol)
                 results.append(item)
 
+        # 再查 Yahoo Search
         raw = yahoo_search(q)
         quotes = raw.get("quotes", []) if isinstance(raw, dict) else []
+
         for item in quotes:
             symbol = item.get("symbol")
-            name = item.get("shortname") or item.get("longname") or item.get("dispSecIndFlag") or symbol
+            name = item.get("shortname") or item.get("longname") or symbol
             exchange = item.get("exchange") or item.get("exchDisp") or ""
             quote_type = item.get("quoteType") or ""
+
             if not symbol or symbol in seen:
                 continue
+
             if quote_type and quote_type not in {"EQUITY", "ETF", "MUTUALFUND", "INDEX"}:
                 continue
+
             seen.add(symbol)
             results.append({
                 "symbol": symbol,
@@ -227,6 +263,7 @@ def search_symbols(q: str = Query(..., min_length=1), limit: int = Query(8, ge=1
                 "exchange": exchange,
                 "type": quote_type,
             })
+
             if len(results) >= limit:
                 break
 
@@ -238,6 +275,7 @@ def search_symbols(q: str = Query(..., min_length=1), limit: int = Query(8, ge=1
 @app.get("/quote/{symbol}")
 def get_quote(symbol: str):
     try:
+        symbol = normalize_symbol(symbol)
         ticker = yf.Ticker(symbol)
         info = ticker.fast_info
         snapshot = _company_snapshot(ticker)
@@ -250,12 +288,15 @@ def get_quote(symbol: str):
         market_state = info.get("marketState")
 
         intraday = ticker.history(period="2d", interval="1m", prepost=True)
+
         if intraday.empty:
             if last_price is None:
                 return {"error": f"找不到股票代號: {symbol}"}
+
             session = _normalize_session(market_state) or "regular"
             change = round(last_price - previous_close, 2) if previous_close is not None else None
             change_percent = round((change / previous_close) * 100, 2) if previous_close not in (None, 0) and change is not None else None
+
             return {
                 "stock": symbol.upper(),
                 "price": round(last_price, 2),
@@ -278,12 +319,15 @@ def get_quote(symbol: str):
             return {"error": f"無法取得最新報價: {symbol}"}
 
         latest_intraday_price = _safe_float(close_prices.iloc[-1])
+
         regular_only = intraday.between_time("09:30", "16:00")
         regular_close_prices = regular_only["Close"].dropna() if not regular_only.empty else pd.Series(dtype=float)
         regular_price = _safe_float(regular_close_prices.iloc[-1]) if not regular_close_prices.empty else last_price
+
         pre_only = intraday.between_time("04:00", "09:29")
         pre_close_prices = pre_only["Close"].dropna() if not pre_only.empty else pd.Series(dtype=float)
         pre_price = _safe_float(pre_close_prices.iloc[-1]) if not pre_close_prices.empty else None
+
         post_only = intraday.between_time("16:01", "20:00")
         post_close_prices = post_only["Close"].dropna() if not post_only.empty else pd.Series(dtype=float)
         post_price = _safe_float(post_close_prices.iloc[-1]) if not post_close_prices.empty else None
@@ -331,6 +375,8 @@ def get_quote(symbol: str):
 @app.get("/stock/{symbol}")
 def get_stock_data(symbol: str, period: str = "6mo"):
     try:
+        symbol = normalize_symbol(symbol)
+
         allowed_periods = ["1d", "5d", "1mo", "ytd", "3mo", "6mo", "1y", "5y"]
         if period not in allowed_periods:
             return {"error": f"不支援的 period: {period}"}
@@ -346,7 +392,9 @@ def get_stock_data(symbol: str, period: str = "6mo"):
             "5y": "1wk",
         }
         interval = interval_map.get(period, "1d")
+
         df = yf.download(symbol, period=period, interval=interval, auto_adjust=True)
+
         if df.empty:
             return {"error": f"找不到股票代號: {symbol}"}
 
@@ -363,13 +411,25 @@ def get_stock_data(symbol: str, period: str = "6mo"):
 
         ma5 = close_prices.rolling(window=5).mean()
         result = []
+
         for i in range(len(df)):
             try:
-                date_str = str(df.index[i])
+                ts = df.index[i]
+
+                # 關鍵修正：圖表標籤依 period 區分
+                if period in ["1d", "5d"]:
+                    date_str = ts.strftime("%Y-%m-%d %H:%M")
+                    chart_label = ts.strftime("%m-%d %H:%M")
+                else:
+                    date_str = ts.strftime("%Y-%m-%d")
+                    chart_label = ts.strftime("%m-%d")
+
                 price_val = float(close_prices.iloc[i])
                 ma5_val = float(ma5.iloc[i]) if pd.notnull(ma5.iloc[i]) else None
+
                 result.append({
                     "date": date_str,
+                    "chartLabel": chart_label,
                     "price": round(price_val, 2),
                     "ma5": round(ma5_val, 2) if ma5_val is not None else None,
                     "high": round(float(high_prices.iloc[i]), 2),
@@ -385,10 +445,18 @@ def get_stock_data(symbol: str, period: str = "6mo"):
             "interval": interval,
             "data": result,
         }
+
         closes = [float(x) for x in close_prices.tolist()]
         highs = [float(x) for x in high_prices.tolist()]
         lows = [float(x) for x in low_prices.tolist()]
         volumes = [float(x) if pd.notnull(x) else 0.0 for x in volume_series.tolist()]
+
         return _attach_indicators(payload, highs, lows, closes, volumes)
+
     except Exception as e:
         return {"error": f"伺服器內部錯誤: {str(e)}"}
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="127.0.0.1", port=8000, reload=True)
