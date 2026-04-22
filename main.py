@@ -38,7 +38,6 @@ def _tw_code(symbol: str) -> str:
 def _normalize_session(market_state):
     if not market_state:
         return None
-
     state = str(market_state).upper()
     if "PRE" in state:
         return "pre"
@@ -52,12 +51,10 @@ def _normalize_session(market_state):
 def _infer_session_from_time(has_pre_price, has_post_price):
     ny_now = datetime.now(ZoneInfo("America/New_York"))
     current_minutes = ny_now.hour * 60 + ny_now.minute
-
     pre_start = 4 * 60
     regular_start = 9 * 60 + 30
     regular_end = 16 * 60
     post_end = 20 * 60
-
     if pre_start <= current_minutes < regular_start and has_pre_price:
         return "pre"
     if regular_end < current_minutes <= post_end and has_post_price:
@@ -80,7 +77,6 @@ def _company_snapshot(ticker):
     pe_ratio = _safe_float(info.get("trailingPE") or info.get("forwardPE"))
 
     dividend_yield_raw = _safe_float(info.get("dividendYield") or info.get("trailingAnnualDividendYield"))
-
     if dividend_yield_raw is None:
         dividend_rate = _safe_float(info.get("dividendRate") or info.get("trailingAnnualDividendRate"))
         reference_price = _safe_float(info.get("previousClose") or info.get("currentPrice") or fast_info.get("lastPrice"))
@@ -130,20 +126,83 @@ def _search_tw_stocks(query: str, limit: int):
         name = str(item.get("name", ""))
         exchange = item.get("exchange", "TWSE")
         quote_type = item.get("type", "EQUITY")
-
         haystacks = [symbol.lower(), name.lower()]
         if any(normalized in hay for hay in haystacks):
-            results.append(
-                {
-                    "symbol": symbol,
-                    "name": name,
-                    "exchange": exchange,
-                    "type": quote_type,
-                }
-            )
+            results.append({
+                "symbol": symbol,
+                "name": name,
+                "exchange": exchange,
+                "type": quote_type,
+            })
         if len(results) >= limit:
             break
     return results
+
+
+def _compute_rsi(closes, period=14):
+    if len(closes) <= period:
+        return None
+    series = pd.Series(closes, dtype=float)
+    delta = series.diff()
+    gain = delta.clip(lower=0)
+    loss = -delta.clip(upper=0)
+    avg_gain = gain.rolling(window=period).mean()
+    avg_loss = loss.rolling(window=period).mean()
+    last_gain = avg_gain.iloc[-1]
+    last_loss = avg_loss.iloc[-1]
+    if pd.isna(last_gain) or pd.isna(last_loss):
+        return None
+    if last_loss == 0:
+        return 100.0
+    rs = last_gain / last_loss
+    return round(100 - (100 / (1 + rs)), 2)
+
+
+def _compute_mfi(highs, lows, closes, volumes, period=14):
+    if min(len(highs), len(lows), len(closes), len(volumes)) <= period:
+        return None
+    df = pd.DataFrame({
+        "high": pd.Series(highs, dtype=float),
+        "low": pd.Series(lows, dtype=float),
+        "close": pd.Series(closes, dtype=float),
+        "volume": pd.Series(volumes, dtype=float),
+    })
+    typical = (df["high"] + df["low"] + df["close"]) / 3
+    money_flow = typical * df["volume"]
+    direction = typical.diff()
+    positive_flow = money_flow.where(direction > 0, 0.0)
+    negative_flow = money_flow.where(direction < 0, 0.0).abs()
+    pos_sum = positive_flow.rolling(window=period).sum().iloc[-1]
+    neg_sum = negative_flow.rolling(window=period).sum().iloc[-1]
+    if pd.isna(pos_sum) or pd.isna(neg_sum):
+        return None
+    if neg_sum == 0:
+        return 100.0
+    mfr = pos_sum / neg_sum
+    return round(100 - (100 / (1 + mfr)), 2)
+
+
+def _signal_from_indicators(rsi, mfi):
+    if rsi is None and mfi is None:
+        return "-"
+    if rsi is not None and mfi is not None:
+        if rsi >= 60 and mfi >= 60:
+            return "強勢"
+        if rsi <= 45 and mfi <= 45:
+            return "主力出貨"
+        return "中性"
+    if rsi is not None:
+        return "強勢" if rsi >= 60 else "主力出貨" if rsi <= 45 else "中性"
+    return "強勢" if mfi >= 60 else "主力出貨" if mfi <= 45 else "中性"
+
+
+def _attach_indicators(payload, highs, lows, closes, volumes):
+    rsi = _compute_rsi(closes)
+    mfi = _compute_mfi(highs, lows, closes, volumes)
+    payload["rsi"] = rsi
+    payload["mfi"] = mfi
+    payload["signal"] = _signal_from_indicators(rsi, mfi)
+    return payload
 
 
 def _twstock_quote(symbol: str):
@@ -176,10 +235,8 @@ def _twstock_quote(symbol: str):
     high_price = _safe_float(realtime.get("high"))
     low_price = _safe_float(realtime.get("low"))
     previous_close = _safe_float(realtime.get("yesterday_close"))
-
     change = round(last_price - previous_close, 2) if last_price is not None and previous_close is not None else None
     change_percent = round((change / previous_close) * 100, 2) if previous_close not in (None, 0) and change is not None else None
-
     name = info.get("name") or symbol
 
     return {
@@ -227,25 +284,31 @@ def _twstock_history(symbol: str, period: str):
     take = interval_map.get(period, 132)
     sliced = history[-take:]
 
-    prices = [item.close for item in sliced]
+    closes = [item.close for item in sliced]
+    highs = [item.high for item in sliced]
+    lows = [item.low for item in sliced]
+    volumes = [item.capacity for item in sliced]
+
     result = []
     for idx, item in enumerate(sliced):
-        window = prices[max(0, idx - 4): idx + 1]
+        window = closes[max(0, idx - 4): idx + 1]
         ma5 = round(sum(window) / len(window), 2) if len(window) == 5 else None
-        result.append(
-            {
-                "date": item.date.strftime("%Y-%m-%d"),
-                "price": round(item.close, 2),
-                "ma5": ma5,
-            }
-        )
+        result.append({
+            "date": item.date.strftime("%Y-%m-%d"),
+            "price": round(item.close, 2),
+            "ma5": ma5,
+            "high": round(item.high, 2),
+            "low": round(item.low, 2),
+            "volume": float(item.capacity),
+        })
 
-    return {
+    payload = {
         "stock": symbol.upper(),
         "period": period,
         "interval": "1d",
         "data": result,
     }
+    return _attach_indicators(payload, highs, lows, closes, volumes)
 
 
 @app.get("/search")
@@ -264,29 +327,22 @@ def search_symbols(q: str = Query(..., min_length=1), limit: int = Query(8, ge=1
 
         raw = yahoo_search(q)
         quotes = raw.get("quotes", []) if isinstance(raw, dict) else []
-
         for item in quotes:
             symbol = item.get("symbol")
             name = item.get("shortname") or item.get("longname") or item.get("dispSecIndFlag") or symbol
             exchange = item.get("exchange") or item.get("exchDisp") or ""
             quote_type = item.get("quoteType") or ""
-
             if not symbol or symbol in seen:
                 continue
-
             if quote_type and quote_type not in {"EQUITY", "ETF", "MUTUALFUND", "INDEX"}:
                 continue
-
             seen.add(symbol)
-            results.append(
-                {
-                    "symbol": symbol,
-                    "name": name,
-                    "exchange": exchange,
-                    "type": quote_type,
-                }
-            )
-
+            results.append({
+                "symbol": symbol,
+                "name": name,
+                "exchange": exchange,
+                "type": quote_type,
+            })
             if len(results) >= limit:
                 break
 
@@ -316,11 +372,9 @@ def get_quote(symbol: str):
         if intraday.empty:
             if last_price is None:
                 return {"error": f"找不到股票代號: {symbol}"}
-
             session = _normalize_session(market_state) or "regular"
             change = round(last_price - previous_close, 2) if previous_close is not None else None
             change_percent = round((change / previous_close) * 100, 2) if previous_close not in (None, 0) and change is not None else None
-
             return {
                 "stock": symbol.upper(),
                 "price": round(last_price, 2),
@@ -343,15 +397,12 @@ def get_quote(symbol: str):
             return {"error": f"無法取得最新報價: {symbol}"}
 
         latest_intraday_price = _safe_float(close_prices.iloc[-1])
-
         regular_only = intraday.between_time("09:30", "16:00")
         regular_close_prices = regular_only["Close"].dropna() if not regular_only.empty else pd.Series(dtype=float)
         regular_price = _safe_float(regular_close_prices.iloc[-1]) if not regular_close_prices.empty else last_price
-
         pre_only = intraday.between_time("04:00", "09:29")
         pre_close_prices = pre_only["Close"].dropna() if not pre_only.empty else pd.Series(dtype=float)
         pre_price = _safe_float(pre_close_prices.iloc[-1]) if not pre_close_prices.empty else None
-
         post_only = intraday.between_time("16:01", "20:00")
         post_close_prices = post_only["Close"].dropna() if not post_only.empty else pd.Series(dtype=float)
         post_price = _safe_float(post_close_prices.iloc[-1]) if not post_close_prices.empty else None
@@ -360,20 +411,14 @@ def get_quote(symbol: str):
         if session is None:
             session = _infer_session_from_time(pre_price is not None, post_price is not None)
 
-        extended_price = None
         if session == "pre":
             extended_price = pre_price or latest_intraday_price
-        elif session == "post":
-            extended_price = post_price or latest_intraday_price
-        else:
-            extended_price = post_price or pre_price
-
-        display_price = None
-        if session == "pre":
             display_price = pre_price or extended_price or latest_intraday_price or last_price or regular_price
         elif session == "post":
+            extended_price = post_price or latest_intraday_price
             display_price = post_price or extended_price or latest_intraday_price or last_price or regular_price
         else:
+            extended_price = post_price or pre_price
             display_price = regular_price or last_price or latest_intraday_price or extended_price
 
         if previous_close is None and len(close_prices) > 1:
@@ -422,42 +467,50 @@ def get_stock_data(symbol: str, period: str = "6mo"):
             "1y": "1d",
             "5y": "1wk",
         }
-
         interval = interval_map.get(period, "1d")
         df = yf.download(symbol, period=period, interval=interval, auto_adjust=True)
-
         if df.empty:
             return {"error": f"找不到股票代號: {symbol}"}
 
         if isinstance(df["Close"], pd.DataFrame):
             close_prices = df["Close"].iloc[:, 0]
+            high_prices = df["High"].iloc[:, 0]
+            low_prices = df["Low"].iloc[:, 0]
+            volume_series = df["Volume"].iloc[:, 0]
         else:
             close_prices = df["Close"]
+            high_prices = df["High"]
+            low_prices = df["Low"]
+            volume_series = df["Volume"]
 
         ma5 = close_prices.rolling(window=5).mean()
-
         result = []
         for i in range(len(df)):
             try:
                 date_str = str(df.index[i])
                 price_val = float(close_prices.iloc[i])
                 ma5_val = float(ma5.iloc[i]) if pd.notnull(ma5.iloc[i]) else None
-                result.append(
-                    {
-                        "date": date_str,
-                        "price": round(price_val, 2),
-                        "ma5": round(ma5_val, 2) if ma5_val is not None else None,
-                    }
-                )
+                result.append({
+                    "date": date_str,
+                    "price": round(price_val, 2),
+                    "ma5": round(ma5_val, 2) if ma5_val is not None else None,
+                    "high": round(float(high_prices.iloc[i]), 2),
+                    "low": round(float(low_prices.iloc[i]), 2),
+                    "volume": float(volume_series.iloc[i]) if pd.notnull(volume_series.iloc[i]) else 0.0,
+                })
             except Exception:
                 continue
 
-        return {
+        payload = {
             "stock": symbol.upper(),
             "period": period,
             "interval": interval,
             "data": result,
         }
-
+        closes = [float(x) for x in close_prices.tolist()]
+        highs = [float(x) for x in high_prices.tolist()]
+        lows = [float(x) for x in low_prices.tolist()]
+        volumes = [float(x) if pd.notnull(x) else 0.0 for x in volume_series.tolist()]
+        return _attach_indicators(payload, highs, lows, closes, volumes)
     except Exception as e:
         return {"error": f"伺服器內部錯誤: {str(e)}"}
