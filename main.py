@@ -5,6 +5,7 @@ import json
 
 from fastapi import FastAPI, Query
 import pandas as pd
+import twstock
 import yfinance as yf
 from yahooquery import search as yahoo_search
 
@@ -23,6 +24,15 @@ def _safe_float(value):
         return float(value) if value is not None else None
     except Exception:
         return None
+
+
+def _is_tw_symbol(symbol: str) -> bool:
+    upper = symbol.upper()
+    return upper.endswith(".TW") or upper.endswith(".TWO")
+
+
+def _tw_code(symbol: str) -> str:
+    return symbol.split(".")[0]
 
 
 def _normalize_session(market_state):
@@ -136,6 +146,108 @@ def _search_tw_stocks(query: str, limit: int):
     return results
 
 
+def _twstock_quote(symbol: str):
+    code = _tw_code(symbol)
+    stock = twstock.realtime.get(code)
+    if not stock.get("success"):
+        return {"error": f"找不到台股代號: {symbol}"}
+
+    realtime = stock.get("realtime", {}) or {}
+    info = stock.get("info", {}) or {}
+    latest_trade_price = realtime.get("latest_trade_price") or []
+    best_bid_price = realtime.get("best_bid_price") or []
+    best_ask_price = realtime.get("best_ask_price") or []
+
+    last_price = None
+    if latest_trade_price:
+        valid = [p for p in latest_trade_price if p not in ("-", "", None)]
+        if valid:
+            last_price = _safe_float(valid[-1])
+    if last_price is None and best_bid_price:
+        valid = [p for p in best_bid_price if p not in ("-", "", None)]
+        if valid:
+            last_price = _safe_float(valid[0])
+    if last_price is None and best_ask_price:
+        valid = [p for p in best_ask_price if p not in ("-", "", None)]
+        if valid:
+            last_price = _safe_float(valid[0])
+
+    open_price = _safe_float(realtime.get("open"))
+    high_price = _safe_float(realtime.get("high"))
+    low_price = _safe_float(realtime.get("low"))
+    previous_close = _safe_float(realtime.get("yesterday_close"))
+
+    change = round(last_price - previous_close, 2) if last_price is not None and previous_close is not None else None
+    change_percent = round((change / previous_close) * 100, 2) if previous_close not in (None, 0) and change is not None else None
+
+    name = info.get("name") or symbol
+
+    return {
+        "stock": symbol.upper(),
+        "price": round(last_price, 2) if last_price is not None else None,
+        "displayPrice": round(last_price, 2) if last_price is not None else None,
+        "regularPrice": round(last_price, 2) if last_price is not None else None,
+        "extendedPrice": None,
+        "previousClose": round(previous_close, 2) if previous_close is not None else None,
+        "change": change,
+        "changePercent": change_percent,
+        "dayHigh": round(high_price, 2) if high_price is not None else None,
+        "dayLow": round(low_price, 2) if low_price is not None else None,
+        "currency": "TWD",
+        "marketState": None,
+        "session": "regular",
+        "companyName": name,
+        "marketCap": None,
+        "openPrice": round(open_price, 2) if open_price is not None else None,
+        "fiftyTwoWeekHigh": None,
+        "fiftyTwoWeekLow": None,
+        "eps": None,
+        "peRatio": None,
+        "dividendYield": None,
+    }
+
+
+def _twstock_history(symbol: str, period: str):
+    code = _tw_code(symbol)
+    stock = twstock.Stock(code)
+    history = stock.fetch_from(2024, 1)
+    if not history:
+        return {"error": f"找不到台股代號: {symbol}"}
+
+    interval_map = {
+        "1d": 1,
+        "5d": 5,
+        "1mo": 22,
+        "ytd": 120,
+        "3mo": 66,
+        "6mo": 132,
+        "1y": 264,
+        "5y": 1320,
+    }
+    take = interval_map.get(period, 132)
+    sliced = history[-take:]
+
+    prices = [item.close for item in sliced]
+    result = []
+    for idx, item in enumerate(sliced):
+        window = prices[max(0, idx - 4): idx + 1]
+        ma5 = round(sum(window) / len(window), 2) if len(window) == 5 else None
+        result.append(
+            {
+                "date": item.date.strftime("%Y-%m-%d"),
+                "price": round(item.close, 2),
+                "ma5": ma5,
+            }
+        )
+
+    return {
+        "stock": symbol.upper(),
+        "period": period,
+        "interval": "1d",
+        "data": result,
+    }
+
+
 @app.get("/search")
 def search_symbols(q: str = Query(..., min_length=1), limit: int = Query(8, ge=1, le=20)):
     try:
@@ -186,6 +298,9 @@ def search_symbols(q: str = Query(..., min_length=1), limit: int = Query(8, ge=1
 @app.get("/quote/{symbol}")
 def get_quote(symbol: str):
     try:
+        if _is_tw_symbol(symbol):
+            return _twstock_quote(symbol)
+
         ticker = yf.Ticker(symbol)
         info = ticker.fast_info
         snapshot = _company_snapshot(ticker)
@@ -290,6 +405,9 @@ def get_quote(symbol: str):
 @app.get("/stock/{symbol}")
 def get_stock_data(symbol: str, period: str = "6mo"):
     try:
+        if _is_tw_symbol(symbol):
+            return _twstock_history(symbol, period)
+
         allowed_periods = ["1d", "5d", "1mo", "ytd", "3mo", "6mo", "1y", "5y"]
         if period not in allowed_periods:
             return {"error": f"不支援的 period: {period}"}
