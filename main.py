@@ -53,6 +53,41 @@ def _infer_session_from_time(has_pre_price, has_post_price):
     return "regular"
 
 
+def _company_snapshot(ticker):
+    info = getattr(ticker, "info", {}) or {}
+    fast_info = getattr(ticker, "fast_info", {}) or {}
+
+    company_name = info.get("longName") or info.get("shortName") or info.get("displayName")
+    market_cap = _safe_float(info.get("marketCap") or fast_info.get("marketCap"))
+    fifty_two_week_high = _safe_float(
+        info.get("fiftyTwoWeekHigh")
+        or info.get("fiftyTwoWeekHighChangePercent")
+        or fast_info.get("yearHigh")
+    )
+    fifty_two_week_low = _safe_float(
+        info.get("fiftyTwoWeekLow")
+        or fast_info.get("yearLow")
+    )
+    eps = _safe_float(info.get("trailingEps") or info.get("epsTrailingTwelveMonths"))
+    pe_ratio = _safe_float(info.get("trailingPE") or info.get("forwardPE"))
+
+    dividend_yield_raw = _safe_float(info.get("dividendYield"))
+    if dividend_yield_raw is not None and dividend_yield_raw <= 1:
+        dividend_yield = dividend_yield_raw * 100
+    else:
+        dividend_yield = dividend_yield_raw
+
+    return {
+        "companyName": company_name,
+        "marketCap": market_cap,
+        "fiftyTwoWeekHigh": fifty_two_week_high,
+        "fiftyTwoWeekLow": fifty_two_week_low,
+        "eps": eps,
+        "peRatio": pe_ratio,
+        "dividendYield": dividend_yield,
+    }
+
+
 @app.get("/search")
 def search_symbols(q: str = Query(..., min_length=1), limit: int = Query(8, ge=1, le=20)):
     try:
@@ -96,6 +131,7 @@ def get_quote(symbol: str):
     try:
         ticker = yf.Ticker(symbol)
         info = ticker.fast_info
+        snapshot = _company_snapshot(ticker)
 
         last_price = _safe_float(info.get("lastPrice"))
         previous_close = _safe_float(info.get("previousClose"))
@@ -127,6 +163,7 @@ def get_quote(symbol: str):
                 "currency": currency,
                 "marketState": market_state,
                 "session": session,
+                **snapshot,
             }
 
         close_prices = intraday["Close"].dropna()
@@ -187,6 +224,7 @@ def get_quote(symbol: str):
             "currency": currency,
             "marketState": market_state,
             "session": session,
+            **snapshot,
         }
     except Exception as e:
         return {"error": f"伺服器內部錯誤: {str(e)}"}
