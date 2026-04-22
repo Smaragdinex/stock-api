@@ -71,8 +71,19 @@ def _company_snapshot(ticker):
     eps = _safe_float(info.get("trailingEps") or info.get("epsTrailingTwelveMonths"))
     pe_ratio = _safe_float(info.get("trailingPE") or info.get("forwardPE"))
 
-    dividend_yield_raw = _safe_float(info.get("dividendYield"))
-    if dividend_yield_raw is not None and dividend_yield_raw < 0.01:
+    dividend_yield_raw = _safe_float(
+        info.get("dividendYield")
+        or info.get("trailingAnnualDividendYield")
+    )
+
+    if dividend_yield_raw is None:
+        dividend_rate = _safe_float(info.get("dividendRate") or info.get("trailingAnnualDividendRate"))
+        reference_price = _safe_float(info.get("previousClose") or info.get("currentPrice") or fast_info.get("lastPrice"))
+        if dividend_rate is not None and reference_price not in (None, 0):
+            dividend_yield = (dividend_rate / reference_price) * 100
+        else:
+            dividend_yield = None
+    elif dividend_yield_raw < 0.01:
         dividend_yield = dividend_yield_raw * 100
     else:
         dividend_yield = dividend_yield_raw
