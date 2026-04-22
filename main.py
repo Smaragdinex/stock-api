@@ -11,11 +11,24 @@ def root():
 @app.get("/stock/{symbol}")
 def get_stock_data(symbol: str, period: str = "6mo"):
     try:
-        allowed_periods = ["1mo", "3mo", "6mo", "1y"]
+        allowed_periods = ["1d", "5d", "1mo", "ytd", "3mo", "6mo", "1y", "5y"]
         if period not in allowed_periods:
             return {"error": f"不支援的 period: {period}"}
 
-        df = yf.download(symbol, period=period, interval="1d", auto_adjust=True)
+        interval_map = {
+            "1d": "5m",
+            "5d": "30m",
+            "1mo": "1d",
+            "ytd": "1d",
+            "3mo": "1d",
+            "6mo": "1d",
+            "1y": "1d",
+            "5y": "1wk"
+        }
+
+        interval = interval_map.get(period, "1d")
+
+        df = yf.download(symbol, period=period, interval=interval, auto_adjust=True)
 
         if df.empty:
             return {"error": f"找不到股票代號: {symbol}"}
@@ -28,10 +41,9 @@ def get_stock_data(symbol: str, period: str = "6mo"):
         ma5 = close_prices.rolling(window=5).mean()
 
         result = []
-
         for i in range(len(df)):
             try:
-                date_str = df.index[i].strftime("%Y-%m-%d")
+                date_str = str(df.index[i])
                 price_val = float(close_prices.iloc[i])
                 ma5_val = float(ma5.iloc[i]) if pd.notnull(ma5.iloc[i]) else None
 
@@ -46,6 +58,7 @@ def get_stock_data(symbol: str, period: str = "6mo"):
         return {
             "stock": symbol.upper(),
             "period": period,
+            "interval": interval,
             "data": result
         }
 
