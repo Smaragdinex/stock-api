@@ -73,28 +73,35 @@ def get_quote(symbol: str):
         if close_prices.empty:
             return {"error": f"無法取得最新報價: {symbol}"}
 
-        display_price = _safe_float(close_prices.iloc[-1])
+        latest_intraday_price = _safe_float(close_prices.iloc[-1])
 
         regular_only = intraday.between_time("09:30", "16:00")
         regular_close_prices = regular_only["Close"].dropna() if not regular_only.empty else pd.Series(dtype=float)
         regular_price = _safe_float(regular_close_prices.iloc[-1]) if not regular_close_prices.empty else last_price
 
-        extended_only = pd.concat([
-            intraday.between_time("04:00", "09:29"),
-            intraday.between_time("16:01", "20:00")
-        ]).sort_index()
-        extended_close_prices = extended_only["Close"].dropna() if not extended_only.empty else pd.Series(dtype=float)
-        extended_price = _safe_float(extended_close_prices.iloc[-1]) if not extended_close_prices.empty else None
+        pre_only = intraday.between_time("04:00", "09:29")
+        pre_close_prices = pre_only["Close"].dropna() if not pre_only.empty else pd.Series(dtype=float)
+        pre_price = _safe_float(pre_close_prices.iloc[-1]) if not pre_close_prices.empty else None
 
-        if display_price is None:
-            display_price = extended_price or regular_price or last_price
+        post_only = intraday.between_time("16:01", "20:00")
+        post_close_prices = post_only["Close"].dropna() if not post_only.empty else pd.Series(dtype=float)
+        post_price = _safe_float(post_close_prices.iloc[-1]) if not post_close_prices.empty else None
 
+        extended_price = None
         if session == "pre":
-            display_price = extended_price or display_price or regular_price or last_price
+            extended_price = pre_price or latest_intraday_price
         elif session == "post":
-            display_price = extended_price or display_price or regular_price or last_price
+            extended_price = post_price or latest_intraday_price
         else:
-            display_price = regular_price or display_price or last_price
+            extended_price = post_price or pre_price
+
+        display_price = None
+        if session == "pre":
+            display_price = pre_price or extended_price or latest_intraday_price or last_price or regular_price
+        elif session == "post":
+            display_price = post_price or extended_price or latest_intraday_price or last_price or regular_price
+        else:
+            display_price = regular_price or last_price or latest_intraday_price or extended_price
 
         if previous_close is None and len(close_prices) > 1:
             previous_close = _safe_float(close_prices.iloc[-2])
