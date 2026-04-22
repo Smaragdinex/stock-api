@@ -59,9 +59,9 @@ def _company_snapshot(ticker):
 
     company_name = info.get("longName") or info.get("shortName") or info.get("displayName")
     market_cap = _safe_float(info.get("marketCap") or fast_info.get("marketCap"))
+    open_price = _safe_float(info.get("open") or fast_info.get("open"))
     fifty_two_week_high = _safe_float(
         info.get("fiftyTwoWeekHigh")
-        or info.get("fiftyTwoWeekHighChangePercent")
         or fast_info.get("yearHigh")
     )
     fifty_two_week_low = _safe_float(
@@ -72,7 +72,7 @@ def _company_snapshot(ticker):
     pe_ratio = _safe_float(info.get("trailingPE") or info.get("forwardPE"))
 
     dividend_yield_raw = _safe_float(info.get("dividendYield"))
-    if dividend_yield_raw is not None and dividend_yield_raw <= 1:
+    if dividend_yield_raw is not None and dividend_yield_raw < 0.01:
         dividend_yield = dividend_yield_raw * 100
     else:
         dividend_yield = dividend_yield_raw
@@ -80,6 +80,7 @@ def _company_snapshot(ticker):
     return {
         "companyName": company_name,
         "marketCap": market_cap,
+        "openPrice": open_price,
         "fiftyTwoWeekHigh": fifty_two_week_high,
         "fiftyTwoWeekLow": fifty_two_week_low,
         "eps": eps,
