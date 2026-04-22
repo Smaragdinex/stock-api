@@ -1,0 +1,18 @@
+[
+  {"symbol": "2330.TW", "name": "台積電", "exchange": "TWSE", "type": "EQUITY"},
+  {"symbol": "2317.TW", "name": "鴻海", "exchange": "TWSE", "type": "EQUITY"},
+  {"symbol": "2454.TW", "name": "聯發科", "exchange": "TWSE", "type": "EQUITY"},
+  {"symbol": "2303.TW", "name": "聯電", "exchange": "TWSE", "type": "EQUITY"},
+  {"symbol": "2412.TW", "name": "中華電", "exchange": "TWSE", "type": "EQUITY"},
+  {"symbol": "2382.TW", "name": "廣達", "exchange": "TWSE", "type": "EQUITY"},
+  {"symbol": "2308.TW", "name": "台達電", "exchange": "TWSE", "type": "EQUITY"},
+  {"symbol": "2882.TW", "name": "國泰金", "exchange": "TWSE", "type": "EQUITY"},
+  {"symbol": "2881.TW", "name": "富邦金", "exchange": "TWSE", "type": "EQUITY"},
+  {"symbol": "2891.TW", "name": "中信金", "exchange": "TWSE", "type": "EQUITY"},
+  {"symbol": "1301.TW", "name": "台塑", "exchange": "TWSE", "type": "EQUITY"},
+  {"symbol": "1303.TW", "name": "南亞", "exchange": "TWSE", "type": "EQUITY"},
+  {"symbol": "2002.TW", "name": "中鋼", "exchange": "TWSE", "type": "EQUITY"},
+  {"symbol": "2603.TW", "name": "長榮", "exchange": "TWSE", "type": "EQUITY"},
+  {"symbol": "2609.TW", "name": "陽明", "exchange": "TWSE", "type": "EQUITY"},
+  {"symbol": "2615.TW", "name": "萬海", "exchange": "TWSE", "type": "EQUITY"}
+]

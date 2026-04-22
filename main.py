@@ -1,5 +1,7 @@
 from datetime import datetime
+from pathlib import Path
 from zoneinfo import ZoneInfo
+import json
 
 from fastapi import FastAPI, Query
 import pandas as pd
@@ -7,6 +9,8 @@ import yfinance as yf
 from yahooquery import search as yahoo_search
 
 app = FastAPI()
+BASE_DIR = Path(__file__).resolve().parent
+TW_STOCKS_PATH = BASE_DIR / "tw_stocks.json"
 
 
 @app.get("/")
@@ -60,21 +64,12 @@ def _company_snapshot(ticker):
     company_name = info.get("longName") or info.get("shortName") or info.get("displayName")
     market_cap = _safe_float(info.get("marketCap") or fast_info.get("marketCap"))
     open_price = _safe_float(info.get("open") or fast_info.get("open"))
-    fifty_two_week_high = _safe_float(
-        info.get("fiftyTwoWeekHigh")
-        or fast_info.get("yearHigh")
-    )
-    fifty_two_week_low = _safe_float(
-        info.get("fiftyTwoWeekLow")
-        or fast_info.get("yearLow")
-    )
+    fifty_two_week_high = _safe_float(info.get("fiftyTwoWeekHigh") or fast_info.get("yearHigh"))
+    fifty_two_week_low = _safe_float(info.get("fiftyTwoWeekLow") or fast_info.get("yearLow"))
     eps = _safe_float(info.get("trailingEps") or info.get("epsTrailingTwelveMonths"))
     pe_ratio = _safe_float(info.get("trailingPE") or info.get("forwardPE"))
 
-    dividend_yield_raw = _safe_float(
-        info.get("dividendYield")
-        or info.get("trailingAnnualDividendYield")
-    )
+    dividend_yield_raw = _safe_float(info.get("dividendYield") or info.get("trailingAnnualDividendYield"))
 
     if dividend_yield_raw is None:
         dividend_rate = _safe_float(info.get("dividendRate") or info.get("trailingAnnualDividendRate"))
@@ -100,14 +95,64 @@ def _company_snapshot(ticker):
     }
 
 
+def _contains_chinese(text: str) -> bool:
+    return any("\u4e00" <= ch <= "\u9fff" for ch in text)
+
+
+def _load_tw_stocks():
+    if not TW_STOCKS_PATH.exists():
+        return []
+    try:
+        return json.loads(TW_STOCKS_PATH.read_text())
+    except Exception:
+        return []
+
+
+def _search_tw_stocks(query: str, limit: int):
+    normalized = query.strip().lower()
+    if not normalized:
+        return []
+
+    stocks = _load_tw_stocks()
+    results = []
+    for item in stocks:
+        symbol = str(item.get("symbol", ""))
+        name = str(item.get("name", ""))
+        exchange = item.get("exchange", "TWSE")
+        quote_type = item.get("type", "EQUITY")
+
+        haystacks = [symbol.lower(), name.lower()]
+        if any(normalized in hay for hay in haystacks):
+            results.append(
+                {
+                    "symbol": symbol,
+                    "name": name,
+                    "exchange": exchange,
+                    "type": quote_type,
+                }
+            )
+        if len(results) >= limit:
+            break
+    return results
+
+
 @app.get("/search")
 def search_symbols(q: str = Query(..., min_length=1), limit: int = Query(8, ge=1, le=20)):
     try:
+        seen = set()
+        results = []
+
+        if _contains_chinese(q):
+            for item in _search_tw_stocks(q, limit):
+                symbol = item["symbol"]
+                if symbol in seen:
+                    continue
+                seen.add(symbol)
+                results.append(item)
+
         raw = yahoo_search(q)
         quotes = raw.get("quotes", []) if isinstance(raw, dict) else []
 
-        seen = set()
-        results = []
         for item in quotes:
             symbol = item.get("symbol")
             name = item.get("shortname") or item.get("longname") or item.get("dispSecIndFlag") or symbol
@@ -133,7 +178,7 @@ def search_symbols(q: str = Query(..., min_length=1), limit: int = Query(8, ge=1
             if len(results) >= limit:
                 break
 
-        return {"query": q, "results": results}
+        return {"query": q, "results": results[:limit]}
     except Exception as e:
         return {"error": f"搜尋失敗: {str(e)}", "results": []}
 
