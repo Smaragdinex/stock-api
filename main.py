@@ -1,3 +1,6 @@
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
 from fastapi import FastAPI
 import yfinance as yf
 import pandas as pd
@@ -19,7 +22,7 @@ def _safe_float(value):
 
 def _normalize_session(market_state):
     if not market_state:
-        return "regular"
+        return None
 
     state = str(market_state).upper()
     if "PRE" in state:
@@ -29,6 +32,24 @@ def _normalize_session(market_state):
     if "REGULAR" in state or "OPEN" in state:
         return "regular"
     return state.lower()
+
+
+def _infer_session_from_time(has_pre_price, has_post_price):
+    ny_now = datetime.now(ZoneInfo("America/New_York"))
+    current_minutes = ny_now.hour * 60 + ny_now.minute
+
+    pre_start = 4 * 60
+    regular_start = 9 * 60 + 30
+    regular_end = 16 * 60
+    post_end = 20 * 60
+
+    if pre_start <= current_minutes < regular_start and has_pre_price:
+        return "pre"
+    if regular_end < current_minutes <= post_end and has_post_price:
+        return "post"
+    if regular_start <= current_minutes <= regular_end:
+        return "regular"
+    return "regular"
 
 
 @app.get("/quote/{symbol}")
@@ -43,13 +64,13 @@ def get_quote(symbol: str):
         day_low = _safe_float(info.get("dayLow"))
         currency = info.get("currency") or "USD"
         market_state = info.get("marketState")
-        session = _normalize_session(market_state)
 
         intraday = ticker.history(period="2d", interval="1m", prepost=True)
         if intraday.empty:
             if last_price is None:
                 return {"error": f"找不到股票代號: {symbol}"}
 
+            session = _normalize_session(market_state) or "regular"
             change = round(last_price - previous_close, 2) if previous_close is not None else None
             change_percent = round((change / previous_close) * 100, 2) if previous_close not in (None, 0) and change is not None else None
 
@@ -86,6 +107,10 @@ def get_quote(symbol: str):
         post_only = intraday.between_time("16:01", "20:00")
         post_close_prices = post_only["Close"].dropna() if not post_only.empty else pd.Series(dtype=float)
         post_price = _safe_float(post_close_prices.iloc[-1]) if not post_close_prices.empty else None
+
+        session = _normalize_session(market_state)
+        if session is None:
+            session = _infer_session_from_time(pre_price is not None, post_price is not None)
 
         extended_price = None
         if session == "pre":
