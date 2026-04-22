@@ -1,9 +1,10 @@
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from fastapi import FastAPI
-import yfinance as yf
+from fastapi import FastAPI, Query
 import pandas as pd
+import yfinance as yf
+from yahooquery import search as yahoo_search
 
 app = FastAPI()
 
@@ -50,6 +51,44 @@ def _infer_session_from_time(has_pre_price, has_post_price):
     if regular_start <= current_minutes <= regular_end:
         return "regular"
     return "regular"
+
+
+@app.get("/search")
+def search_symbols(q: str = Query(..., min_length=1), limit: int = Query(8, ge=1, le=20)):
+    try:
+        raw = yahoo_search(q)
+        quotes = raw.get("quotes", []) if isinstance(raw, dict) else []
+
+        seen = set()
+        results = []
+        for item in quotes:
+            symbol = item.get("symbol")
+            name = item.get("shortname") or item.get("longname") or item.get("dispSecIndFlag") or symbol
+            exchange = item.get("exchange") or item.get("exchDisp") or ""
+            quote_type = item.get("quoteType") or ""
+
+            if not symbol or symbol in seen:
+                continue
+
+            if quote_type and quote_type not in {"EQUITY", "ETF", "MUTUALFUND", "INDEX"}:
+                continue
+
+            seen.add(symbol)
+            results.append(
+                {
+                    "symbol": symbol,
+                    "name": name,
+                    "exchange": exchange,
+                    "type": quote_type,
+                }
+            )
+
+            if len(results) >= limit:
+                break
+
+        return {"query": q, "results": results}
+    except Exception as e:
+        return {"error": f"搜尋失敗: {str(e)}", "results": []}
 
 
 @app.get("/quote/{symbol}")
@@ -168,11 +207,10 @@ def get_stock_data(symbol: str, period: str = "6mo"):
             "3mo": "1d",
             "6mo": "1d",
             "1y": "1d",
-            "5y": "1wk"
+            "5y": "1wk",
         }
 
         interval = interval_map.get(period, "1d")
-
         df = yf.download(symbol, period=period, interval=interval, auto_adjust=True)
 
         if df.empty:
@@ -191,12 +229,13 @@ def get_stock_data(symbol: str, period: str = "6mo"):
                 date_str = str(df.index[i])
                 price_val = float(close_prices.iloc[i])
                 ma5_val = float(ma5.iloc[i]) if pd.notnull(ma5.iloc[i]) else None
-
-                result.append({
-                    "date": date_str,
-                    "price": round(price_val, 2),
-                    "ma5": round(ma5_val, 2) if ma5_val is not None else None
-                })
+                result.append(
+                    {
+                        "date": date_str,
+                        "price": round(price_val, 2),
+                        "ma5": round(ma5_val, 2) if ma5_val is not None else None,
+                    }
+                )
             except Exception:
                 continue
 
@@ -204,7 +243,7 @@ def get_stock_data(symbol: str, period: str = "6mo"):
             "stock": symbol.upper(),
             "period": period,
             "interval": interval,
-            "data": result
+            "data": result,
         }
 
     except Exception as e:
