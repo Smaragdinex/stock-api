@@ -36,6 +36,19 @@ def normalize_symbol(symbol: str) -> str:
     return symbol
 
 
+def _lookup_tw_symbol(symbol: str):
+    normalized = normalize_symbol(symbol)
+    if not normalized.isdigit():
+        return None
+
+    target = normalized.strip()
+    for item in _load_tw_stocks():
+        full_symbol = str(item.get("symbol", "")).upper()
+        if full_symbol.split(".")[0] == target:
+            return full_symbol
+    return None
+
+
 def candidate_symbols(symbol: str):
     normalized = normalize_symbol(symbol)
 
@@ -43,9 +56,25 @@ def candidate_symbols(symbol: str):
     if "." in normalized:
         return [normalized]
 
-    # 台股數字代碼：先試上市，再試上櫃，最後保留原值
+    # 台股數字代碼：優先依本地上市/上櫃清單決定 .TW / .TWO
     if normalized.isdigit():
-        return [f"{normalized}.TW", f"{normalized}.TWO", normalized]
+        resolved_tw_symbol = _lookup_tw_symbol(normalized)
+        ordered = []
+
+        if resolved_tw_symbol:
+            ordered.append(resolved_tw_symbol)
+            sibling = f"{normalized}.TWO" if resolved_tw_symbol.endswith(".TW") else f"{normalized}.TW"
+            ordered.append(sibling)
+        else:
+            ordered.extend([f"{normalized}.TW", f"{normalized}.TWO"])
+
+        ordered.append(normalized)
+
+        deduped = []
+        for item in ordered:
+            if item not in deduped:
+                deduped.append(item)
+        return deduped
 
     # 其他美股/國際股票
     return [normalized]
