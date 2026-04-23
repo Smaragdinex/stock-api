@@ -633,6 +633,13 @@ def get_earnings(symbol: str, limit: int = Query(5, ge=1, le=8)):
                     actual = _safe_float(row.get("Reported EPS"))
                     surprise_pct = _safe_float(row.get("Surprise(%)"))
 
+                    if estimate is not None and pd.isna(estimate):
+                        estimate = None
+                    if actual is not None and pd.isna(actual):
+                        actual = None
+                    if surprise_pct is not None and pd.isna(surprise_pct):
+                        surprise_pct = None
+
                     items.append({
                         "quarter": quarter_label,
                         "fiscalYear": fiscal_label,
