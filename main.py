@@ -32,16 +32,22 @@ def normalize_symbol(symbol: str) -> str:
     if "." in symbol:
         return symbol
 
-    # 純數字先視為台股代碼，實際查詢時再做 .TW / .TWO fallback
+    # 純數字先保留原樣，交給 candidate_symbols 自動判斷
     return symbol
 
 
 def candidate_symbols(symbol: str):
     normalized = normalize_symbol(symbol)
+
+    # 已經指定市場
     if "." in normalized:
         return [normalized]
+
+    # 台股數字代碼：先試上市，再試上櫃，最後保留原值
     if normalized.isdigit():
         return [f"{normalized}.TW", f"{normalized}.TWO", normalized]
+
+    # 其他美股/國際股票
     return [normalized]
 
 
@@ -288,7 +294,6 @@ def search_symbols(q: str = Query(..., min_length=1), limit: int = Query(8, ge=1
         query = q.strip()
         is_tw_query = _contains_chinese(query) or query.isdigit()
 
-        # 中文或純數字時，先查本地台股清單
         if is_tw_query:
             for item in _search_tw_stocks(query, limit):
                 symbol = item["symbol"]
@@ -297,7 +302,6 @@ def search_symbols(q: str = Query(..., min_length=1), limit: int = Query(8, ge=1
                 seen.add(symbol)
                 results.append(item)
 
-            # 本地清單不足時，補查 Yahoo，但只收台股符號
             if len(results) < limit:
                 for item in _tw_search_from_yahoo(query, limit - len(results)):
                     symbol = item["symbol"]
@@ -306,11 +310,9 @@ def search_symbols(q: str = Query(..., min_length=1), limit: int = Query(8, ge=1
                     seen.add(symbol)
                     results.append(item)
 
-            # 台股查詢時，若已有台股結果就直接回，不混海外市場
             if results:
                 return {"query": q, "results": results[:limit]}
 
-        # 非台股導向查詢，或台股完全沒命中時，再做一般 Yahoo Search
         raw = yahoo_search(query)
         quotes = raw.get("quotes", []) if isinstance(raw, dict) else []
 
@@ -322,7 +324,6 @@ def search_symbols(q: str = Query(..., min_length=1), limit: int = Query(8, ge=1
 
             if not symbol or symbol in seen:
                 continue
-
             if quote_type and quote_type not in {"EQUITY", "ETF", "MUTUALFUND", "INDEX"}:
                 continue
 
@@ -449,94 +450,91 @@ def get_quote(symbol: str):
             last_error = str(e)
             continue
 
-    return {"error": f"伺服器內部錯誤: {last_error}" if last_error else f"找不到股票代號: {symbol}"}
+    return {"error": last_error or f"找不到股票代號: {symbol}"}
 
 
 @app.get("/stock/{symbol}")
 def get_stock_data(symbol: str, period: str = "6mo"):
-    try:
-        symbol = normalize_symbol(symbol)
+    allowed_periods = ["1d", "5d", "1mo", "ytd", "3mo", "6mo", "1y", "5y"]
+    if period not in allowed_periods:
+        return {"error": f"不支援的 period: {period}"}
 
-        allowed_periods = ["1d", "5d", "1mo", "ytd", "3mo", "6mo", "1y", "5y"]
-        if period not in allowed_periods:
-            return {"error": f"不支援的 period: {period}"}
+    interval_map = {
+        "1d": "5m",
+        "5d": "30m",
+        "1mo": "1d",
+        "ytd": "1d",
+        "3mo": "1d",
+        "6mo": "1d",
+        "1y": "1d",
+        "5y": "1wk",
+    }
+    interval = interval_map.get(period, "1d")
+    last_error = None
 
-        interval_map = {
-            "1d": "5m",
-            "5d": "30m",
-            "1mo": "1d",
-            "ytd": "1d",
-            "3mo": "1d",
-            "6mo": "1d",
-            "1y": "1d",
-            "5y": "1wk",
-        }
-        interval = interval_map.get(period, "1d")
+    for resolved_symbol in candidate_symbols(symbol):
+        try:
+            ticker = yf.Ticker(resolved_symbol)
+            df = ticker.history(period=period, interval=interval, auto_adjust=True)
 
-        df = yf.download(symbol, period=period, interval=interval, auto_adjust=True)
+            if df.empty:
+                last_error = f"找不到股票代號: {resolved_symbol}"
+                continue
 
-        if df.empty:
-            return {"error": f"找不到股票代號: {symbol}"}
-
-        if isinstance(df["Close"], pd.DataFrame):
-            close_prices = df["Close"].iloc[:, 0]
-            high_prices = df["High"].iloc[:, 0]
-            low_prices = df["Low"].iloc[:, 0]
-            volume_series = df["Volume"].iloc[:, 0]
-        else:
             close_prices = df["Close"]
             high_prices = df["High"]
             low_prices = df["Low"]
             volume_series = df["Volume"]
+            ma5 = close_prices.rolling(window=5).mean()
 
-        ma5 = close_prices.rolling(window=5).mean()
-        result = []
+            result = []
+            for i in range(len(df)):
+                try:
+                    ts = df.index[i]
 
-        for i in range(len(df)):
-            try:
-                ts = df.index[i]
+                    if period in ["1d", "5d"]:
+                        date_str = ts.strftime("%Y-%m-%d %H:%M")
+                        chart_label = ts.strftime("%m-%d %H:%M")
+                    else:
+                        date_str = ts.strftime("%Y-%m-%d")
+                        chart_label = ts.strftime("%m-%d")
 
-                # 關鍵修正：圖表標籤依 period 區分
-                if period in ["1d", "5d"]:
-                    date_str = ts.strftime("%Y-%m-%d %H:%M")
-                    chart_label = ts.strftime("%m-%d %H:%M")
-                else:
-                    date_str = ts.strftime("%Y-%m-%d")
-                    chart_label = ts.strftime("%m-%d")
+                    price_val = float(close_prices.iloc[i])
+                    ma5_val = float(ma5.iloc[i]) if pd.notnull(ma5.iloc[i]) else None
 
-                price_val = float(close_prices.iloc[i])
-                ma5_val = float(ma5.iloc[i]) if pd.notnull(ma5.iloc[i]) else None
+                    result.append({
+                        "date": date_str,
+                        "chartLabel": chart_label,
+                        "price": round(price_val, 2),
+                        "ma5": round(ma5_val, 2) if ma5_val is not None else None,
+                        "high": round(float(high_prices.iloc[i]), 2),
+                        "low": round(float(low_prices.iloc[i]), 2),
+                        "volume": float(volume_series.iloc[i]) if pd.notnull(volume_series.iloc[i]) else 0.0,
+                    })
+                except Exception:
+                    continue
 
-                result.append({
-                    "date": date_str,
-                    "chartLabel": chart_label,
-                    "price": round(price_val, 2),
-                    "ma5": round(ma5_val, 2) if ma5_val is not None else None,
-                    "high": round(float(high_prices.iloc[i]), 2),
-                    "low": round(float(low_prices.iloc[i]), 2),
-                    "volume": float(volume_series.iloc[i]) if pd.notnull(volume_series.iloc[i]) else 0.0,
-                })
-            except Exception:
-                continue
+            payload = {
+                "stock": resolved_symbol.upper(),
+                "period": period,
+                "interval": interval,
+                "data": result,
+            }
 
-        payload = {
-            "stock": symbol.upper(),
-            "period": period,
-            "interval": interval,
-            "data": result,
-        }
+            closes = [float(x) for x in close_prices.tolist()]
+            highs = [float(x) for x in high_prices.tolist()]
+            lows = [float(x) for x in low_prices.tolist()]
+            volumes = [float(x) if pd.notnull(x) else 0.0 for x in volume_series.tolist()]
 
-        closes = [float(x) for x in close_prices.tolist()]
-        highs = [float(x) for x in high_prices.tolist()]
-        lows = [float(x) for x in low_prices.tolist()]
-        volumes = [float(x) if pd.notnull(x) else 0.0 for x in volume_series.tolist()]
+            return _attach_indicators(payload, highs, lows, closes, volumes)
 
-        return _attach_indicators(payload, highs, lows, closes, volumes)
+        except Exception as e:
+            last_error = str(e)
+            continue
 
-    except Exception as e:
-        return {"error": f"伺服器內部錯誤: {str(e)}"}
+    return {"error": last_error or f"找不到股票代號: {symbol}"}
 
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="127.0.0.1", port=8000, reload=True)
+    uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)
