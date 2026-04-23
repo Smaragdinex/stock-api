@@ -606,35 +606,67 @@ def get_ratings(symbol: str):
 
 
 @app.get("/earnings/{symbol}")
-def get_earnings(symbol: str, limit: int = Query(4, ge=1, le=8)):
+def get_earnings(symbol: str, limit: int = Query(5, ge=1, le=8)):
     last_error = None
 
     for resolved_symbol in candidate_symbols(symbol):
         try:
             ticker = yf.Ticker(resolved_symbol)
-            earnings_history = getattr(ticker, "earnings_history", None)
+            earnings_dates = getattr(ticker, "earnings_dates", None)
+            calendar = getattr(ticker, "calendar", None) or {}
             items = []
 
-            if earnings_history is not None and not earnings_history.empty:
-                df = earnings_history.tail(limit).reset_index()
+            if earnings_dates is not None and not earnings_dates.empty:
+                df = earnings_dates.head(limit).reset_index()
                 for _, row in df.iterrows():
-                    quarter = str(row.get("quarter", ""))[:10]
-                    estimate = _safe_float(row.get("epsEstimate"))
-                    actual = _safe_float(row.get("epsActual"))
-                    diff = _safe_float(row.get("epsDifference"))
-                    surprise_pct = _safe_float(row.get("surprisePercent"))
+                    earnings_date = row.get("Earnings Date")
+                    quarter_label = ""
+                    fiscal_label = ""
+
+                    if pd.notnull(earnings_date):
+                        ts = pd.Timestamp(earnings_date)
+                        quarter = ((ts.month - 1) // 3) + 1
+                        quarter_label = f"Q{quarter}"
+                        fiscal_label = f"FY{str(ts.year)[-2:]}"
+
+                    estimate = _safe_float(row.get("EPS Estimate"))
+                    actual = _safe_float(row.get("Reported EPS"))
+                    surprise_pct = _safe_float(row.get("Surprise(%)"))
 
                     items.append({
-                        "quarter": quarter,
+                        "quarter": quarter_label,
+                        "fiscalYear": fiscal_label,
                         "estimate": round(estimate, 2) if estimate is not None else None,
                         "actual": round(actual, 2) if actual is not None else None,
-                        "difference": round(diff, 2) if diff is not None else None,
-                        "surprisePercent": round(surprise_pct * 100, 2) if surprise_pct is not None and abs(surprise_pct) < 1 else round(surprise_pct, 2) if surprise_pct is not None else None,
+                        "surprisePercent": round(surprise_pct, 2) if surprise_pct is not None else None,
+                        "earningsDate": ts.isoformat() if pd.notnull(earnings_date) else None,
                     })
+
+            next_earnings_date = None
+            earnings_timing = None
+            cal_date = None
+            if isinstance(calendar, dict):
+                raw_dates = calendar.get("Earnings Date")
+                if isinstance(raw_dates, list) and raw_dates:
+                    cal_date = raw_dates[0]
+                elif raw_dates:
+                    cal_date = raw_dates
+
+            if cal_date:
+                if isinstance(cal_date, datetime):
+                    next_earnings_date = cal_date.date().isoformat()
+                    earnings_timing = "after-hours" if cal_date.hour >= 16 else "before-open" if cal_date.hour < 9 else None
+                else:
+                    try:
+                        next_earnings_date = pd.Timestamp(cal_date).date().isoformat()
+                    except Exception:
+                        next_earnings_date = str(cal_date)
 
             return {
                 "stock": resolved_symbol.upper(),
-                "items": list(reversed(items)),
+                "items": items,
+                "nextEarningsDate": next_earnings_date,
+                "earningsTiming": earnings_timing,
             }
         except Exception as e:
             last_error = str(e)
