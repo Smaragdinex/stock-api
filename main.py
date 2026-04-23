@@ -548,6 +548,63 @@ def get_news(symbol: str, limit: int = Query(10, ge=1, le=30)):
     return {"stock": normalize_symbol(symbol), "items": [], "error": last_error}
 
 
+@app.get("/ratings/{symbol}")
+def get_ratings(symbol: str):
+    last_error = None
+
+    for resolved_symbol in candidate_symbols(symbol):
+        try:
+            ticker = yf.Ticker(resolved_symbol)
+            summary = getattr(ticker, "recommendations_summary", None)
+            info = _safe_info(ticker)
+
+            latest = None
+            if summary is not None and not summary.empty:
+                latest = summary.iloc[0].to_dict()
+
+            if not latest:
+                latest = {
+                    "strongBuy": 0,
+                    "buy": 0,
+                    "hold": 0,
+                    "sell": 0,
+                    "strongSell": 0,
+                }
+
+            strong_buy = int(latest.get("strongBuy") or 0)
+            buy = int(latest.get("buy") or 0)
+            hold = int(latest.get("hold") or 0)
+            sell = int(latest.get("sell") or 0)
+            strong_sell = int(latest.get("strongSell") or 0)
+            total = strong_buy + buy + hold + sell + strong_sell
+
+            return {
+                "stock": resolved_symbol.upper(),
+                "strongBuy": strong_buy,
+                "buy": buy,
+                "hold": hold,
+                "sell": sell,
+                "strongSell": strong_sell,
+                "total": total,
+                "recommendationKey": info.get("recommendationKey"),
+                "numberOfAnalystOpinions": info.get("numberOfAnalystOpinions"),
+            }
+        except Exception as e:
+            last_error = str(e)
+            continue
+
+    return {
+        "stock": normalize_symbol(symbol),
+        "strongBuy": 0,
+        "buy": 0,
+        "hold": 0,
+        "sell": 0,
+        "strongSell": 0,
+        "total": 0,
+        "error": last_error,
+    }
+
+
 @app.get("/quote/{symbol}")
 def get_quote(symbol: str):
     last_error = None
