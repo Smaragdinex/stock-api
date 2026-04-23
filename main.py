@@ -605,6 +605,44 @@ def get_ratings(symbol: str):
     }
 
 
+@app.get("/earnings/{symbol}")
+def get_earnings(symbol: str, limit: int = Query(4, ge=1, le=8)):
+    last_error = None
+
+    for resolved_symbol in candidate_symbols(symbol):
+        try:
+            ticker = yf.Ticker(resolved_symbol)
+            earnings_history = getattr(ticker, "earnings_history", None)
+            items = []
+
+            if earnings_history is not None and not earnings_history.empty:
+                df = earnings_history.tail(limit).reset_index()
+                for _, row in df.iterrows():
+                    quarter = str(row.get("quarter", ""))[:10]
+                    estimate = _safe_float(row.get("epsEstimate"))
+                    actual = _safe_float(row.get("epsActual"))
+                    diff = _safe_float(row.get("epsDifference"))
+                    surprise_pct = _safe_float(row.get("surprisePercent"))
+
+                    items.append({
+                        "quarter": quarter,
+                        "estimate": round(estimate, 2) if estimate is not None else None,
+                        "actual": round(actual, 2) if actual is not None else None,
+                        "difference": round(diff, 2) if diff is not None else None,
+                        "surprisePercent": round(surprise_pct * 100, 2) if surprise_pct is not None and abs(surprise_pct) < 1 else round(surprise_pct, 2) if surprise_pct is not None else None,
+                    })
+
+            return {
+                "stock": resolved_symbol.upper(),
+                "items": list(reversed(items)),
+            }
+        except Exception as e:
+            last_error = str(e)
+            continue
+
+    return {"stock": normalize_symbol(symbol), "items": [], "error": last_error}
+
+
 @app.get("/quote/{symbol}")
 def get_quote(symbol: str):
     last_error = None
