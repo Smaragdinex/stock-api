@@ -32,11 +32,33 @@ def normalize_symbol(symbol: str) -> str:
     if "." in symbol:
         return symbol
 
-    # 純數字預設視為台灣上市股票
-    if symbol.isdigit():
-        return f"{symbol}.TW"
-
+    # 純數字先視為台股代碼，實際查詢時再做 .TW / .TWO fallback
     return symbol
+
+
+def candidate_symbols(symbol: str):
+    normalized = normalize_symbol(symbol)
+    if "." in normalized:
+        return [normalized]
+    if normalized.isdigit():
+        return [f"{normalized}.TW", f"{normalized}.TWO", normalized]
+    return [normalized]
+
+
+def _safe_fast_info(ticker):
+    try:
+        data = getattr(ticker, "fast_info", {}) or {}
+        return dict(data)
+    except Exception:
+        return {}
+
+
+def _safe_info(ticker):
+    try:
+        data = getattr(ticker, "info", {}) or {}
+        return dict(data)
+    except Exception:
+        return {}
 
 
 def _normalize_session(market_state):
@@ -70,8 +92,8 @@ def _infer_session_from_time(has_pre_price, has_post_price):
 
 
 def _company_snapshot(ticker):
-    info = getattr(ticker, "info", {}) or {}
-    fast_info = getattr(ticker, "fast_info", {}) or {}
+    info = _safe_info(ticker)
+    fast_info = _safe_fast_info(ticker)
 
     company_name = info.get("longName") or info.get("shortName") or info.get("displayName")
     market_cap = _safe_float(info.get("marketCap") or fast_info.get("marketCap"))
@@ -129,11 +151,12 @@ def _search_tw_stocks(query: str, limit: int):
 
     for item in stocks:
         symbol = str(item.get("symbol", ""))
+        base_symbol = symbol.split(".")[0].lower()
         name = str(item.get("name", ""))
         exchange = item.get("exchange", "TWSE")
         quote_type = item.get("type", "EQUITY")
 
-        haystacks = [symbol.lower(), name.lower()]
+        haystacks = [symbol.lower(), base_symbol, name.lower()]
         if any(normalized in hay for hay in haystacks):
             results.append({
                 "symbol": symbol,
@@ -141,6 +164,38 @@ def _search_tw_stocks(query: str, limit: int):
                 "exchange": exchange,
                 "type": quote_type,
             })
+
+        if len(results) >= limit:
+            break
+
+    return results
+
+
+def _is_tw_symbol(symbol: str) -> bool:
+    upper = (symbol or "").upper()
+    return upper.endswith(".TW") or upper.endswith(".TWO")
+
+
+def _tw_search_from_yahoo(query: str, limit: int):
+    raw = yahoo_search(query)
+    quotes = raw.get("quotes", []) if isinstance(raw, dict) else []
+    results = []
+
+    for item in quotes:
+        symbol = item.get("symbol")
+        if not symbol or not _is_tw_symbol(symbol):
+            continue
+
+        quote_type = item.get("quoteType") or ""
+        if quote_type and quote_type not in {"EQUITY", "ETF", "MUTUALFUND", "INDEX"}:
+            continue
+
+        results.append({
+            "symbol": symbol,
+            "name": item.get("shortname") or item.get("longname") or symbol,
+            "exchange": item.get("exchange") or item.get("exchDisp") or "",
+            "type": quote_type,
+        })
 
         if len(results) >= limit:
             break
@@ -230,18 +285,33 @@ def search_symbols(q: str = Query(..., min_length=1), limit: int = Query(8, ge=1
     try:
         seen = set()
         results = []
+        query = q.strip()
+        is_tw_query = _contains_chinese(query) or query.isdigit()
 
         # 中文或純數字時，先查本地台股清單
-        if _contains_chinese(q) or q.strip().isdigit():
-            for item in _search_tw_stocks(q, limit):
+        if is_tw_query:
+            for item in _search_tw_stocks(query, limit):
                 symbol = item["symbol"]
                 if symbol in seen:
                     continue
                 seen.add(symbol)
                 results.append(item)
 
-        # 再查 Yahoo Search
-        raw = yahoo_search(q)
+            # 本地清單不足時，補查 Yahoo，但只收台股符號
+            if len(results) < limit:
+                for item in _tw_search_from_yahoo(query, limit - len(results)):
+                    symbol = item["symbol"]
+                    if symbol in seen:
+                        continue
+                    seen.add(symbol)
+                    results.append(item)
+
+            # 台股查詢時，若已有台股結果就直接回，不混海外市場
+            if results:
+                return {"query": q, "results": results[:limit]}
+
+        # 非台股導向查詢，或台股完全沒命中時，再做一般 Yahoo Search
+        raw = yahoo_search(query)
         quotes = raw.get("quotes", []) if isinstance(raw, dict) else []
 
         for item in quotes:
@@ -274,35 +344,97 @@ def search_symbols(q: str = Query(..., min_length=1), limit: int = Query(8, ge=1
 
 @app.get("/quote/{symbol}")
 def get_quote(symbol: str):
-    try:
-        symbol = normalize_symbol(symbol)
-        ticker = yf.Ticker(symbol)
-        info = ticker.fast_info
-        snapshot = _company_snapshot(ticker)
+    last_error = None
 
-        last_price = _safe_float(info.get("lastPrice"))
-        previous_close = _safe_float(info.get("previousClose"))
-        day_high = _safe_float(info.get("dayHigh"))
-        day_low = _safe_float(info.get("dayLow"))
-        currency = info.get("currency") or "USD"
-        market_state = info.get("marketState")
+    for resolved_symbol in candidate_symbols(symbol):
+        try:
+            ticker = yf.Ticker(resolved_symbol)
+            info = _safe_fast_info(ticker)
+            snapshot = _company_snapshot(ticker)
 
-        intraday = ticker.history(period="2d", interval="1m", prepost=True)
+            last_price = _safe_float(info.get("lastPrice"))
+            previous_close = _safe_float(info.get("previousClose"))
+            day_high = _safe_float(info.get("dayHigh"))
+            day_low = _safe_float(info.get("dayLow"))
+            currency = info.get("currency") or "USD"
+            market_state = info.get("marketState")
 
-        if intraday.empty:
-            if last_price is None:
-                return {"error": f"找不到股票代號: {symbol}"}
+            try:
+                intraday = ticker.history(period="2d", interval="1m", prepost=True)
+            except Exception:
+                intraday = pd.DataFrame()
 
-            session = _normalize_session(market_state) or "regular"
-            change = round(last_price - previous_close, 2) if previous_close is not None else None
+            if intraday.empty:
+                if last_price is None:
+                    last_error = f"找不到股票代號: {resolved_symbol}"
+                    continue
+
+                session = _normalize_session(market_state) or "regular"
+                change = round(last_price - previous_close, 2) if previous_close is not None else None
+                change_percent = round((change / previous_close) * 100, 2) if previous_close not in (None, 0) and change is not None else None
+
+                return {
+                    "stock": resolved_symbol.upper(),
+                    "price": round(last_price, 2),
+                    "displayPrice": round(last_price, 2),
+                    "regularPrice": round(last_price, 2),
+                    "extendedPrice": None,
+                    "previousClose": round(previous_close, 2) if previous_close is not None else None,
+                    "change": change,
+                    "changePercent": change_percent,
+                    "dayHigh": round(day_high, 2) if day_high is not None else None,
+                    "dayLow": round(day_low, 2) if day_low is not None else None,
+                    "currency": currency,
+                    "marketState": market_state,
+                    "session": session,
+                    **snapshot,
+                }
+
+            close_prices = intraday["Close"].dropna()
+            if close_prices.empty:
+                last_error = f"無法取得最新報價: {resolved_symbol}"
+                continue
+
+            latest_intraday_price = _safe_float(close_prices.iloc[-1])
+
+            regular_only = intraday.between_time("09:30", "16:00")
+            regular_close_prices = regular_only["Close"].dropna() if not regular_only.empty else pd.Series(dtype=float)
+            regular_price = _safe_float(regular_close_prices.iloc[-1]) if not regular_close_prices.empty else last_price
+
+            pre_only = intraday.between_time("04:00", "09:29")
+            pre_close_prices = pre_only["Close"].dropna() if not pre_only.empty else pd.Series(dtype=float)
+            pre_price = _safe_float(pre_close_prices.iloc[-1]) if not pre_close_prices.empty else None
+
+            post_only = intraday.between_time("16:01", "20:00")
+            post_close_prices = post_only["Close"].dropna() if not post_only.empty else pd.Series(dtype=float)
+            post_price = _safe_float(post_close_prices.iloc[-1]) if not post_close_prices.empty else None
+
+            session = _normalize_session(market_state)
+            if session is None:
+                session = _infer_session_from_time(pre_price is not None, post_price is not None)
+
+            if session == "pre":
+                extended_price = pre_price or latest_intraday_price
+                display_price = pre_price or extended_price or latest_intraday_price or last_price or regular_price
+            elif session == "post":
+                extended_price = post_price or latest_intraday_price
+                display_price = post_price or extended_price or latest_intraday_price or last_price or regular_price
+            else:
+                extended_price = post_price or pre_price
+                display_price = regular_price or last_price or latest_intraday_price or extended_price
+
+            if previous_close is None and len(close_prices) > 1:
+                previous_close = _safe_float(close_prices.iloc[-2])
+
+            change = round(display_price - previous_close, 2) if previous_close is not None and display_price is not None else None
             change_percent = round((change / previous_close) * 100, 2) if previous_close not in (None, 0) and change is not None else None
 
             return {
-                "stock": symbol.upper(),
-                "price": round(last_price, 2),
-                "displayPrice": round(last_price, 2),
-                "regularPrice": round(last_price, 2),
-                "extendedPrice": None,
+                "stock": resolved_symbol.upper(),
+                "price": round(display_price, 2) if display_price is not None else None,
+                "displayPrice": round(display_price, 2) if display_price is not None else None,
+                "regularPrice": round(regular_price, 2) if regular_price is not None else None,
+                "extendedPrice": round(extended_price, 2) if extended_price is not None else None,
                 "previousClose": round(previous_close, 2) if previous_close is not None else None,
                 "change": change,
                 "changePercent": change_percent,
@@ -313,63 +445,11 @@ def get_quote(symbol: str):
                 "session": session,
                 **snapshot,
             }
+        except Exception as e:
+            last_error = str(e)
+            continue
 
-        close_prices = intraday["Close"].dropna()
-        if close_prices.empty:
-            return {"error": f"無法取得最新報價: {symbol}"}
-
-        latest_intraday_price = _safe_float(close_prices.iloc[-1])
-
-        regular_only = intraday.between_time("09:30", "16:00")
-        regular_close_prices = regular_only["Close"].dropna() if not regular_only.empty else pd.Series(dtype=float)
-        regular_price = _safe_float(regular_close_prices.iloc[-1]) if not regular_close_prices.empty else last_price
-
-        pre_only = intraday.between_time("04:00", "09:29")
-        pre_close_prices = pre_only["Close"].dropna() if not pre_only.empty else pd.Series(dtype=float)
-        pre_price = _safe_float(pre_close_prices.iloc[-1]) if not pre_close_prices.empty else None
-
-        post_only = intraday.between_time("16:01", "20:00")
-        post_close_prices = post_only["Close"].dropna() if not post_only.empty else pd.Series(dtype=float)
-        post_price = _safe_float(post_close_prices.iloc[-1]) if not post_close_prices.empty else None
-
-        session = _normalize_session(market_state)
-        if session is None:
-            session = _infer_session_from_time(pre_price is not None, post_price is not None)
-
-        if session == "pre":
-            extended_price = pre_price or latest_intraday_price
-            display_price = pre_price or extended_price or latest_intraday_price or last_price or regular_price
-        elif session == "post":
-            extended_price = post_price or latest_intraday_price
-            display_price = post_price or extended_price or latest_intraday_price or last_price or regular_price
-        else:
-            extended_price = post_price or pre_price
-            display_price = regular_price or last_price or latest_intraday_price or extended_price
-
-        if previous_close is None and len(close_prices) > 1:
-            previous_close = _safe_float(close_prices.iloc[-2])
-
-        change = round(display_price - previous_close, 2) if previous_close is not None and display_price is not None else None
-        change_percent = round((change / previous_close) * 100, 2) if previous_close not in (None, 0) and change is not None else None
-
-        return {
-            "stock": symbol.upper(),
-            "price": round(display_price, 2) if display_price is not None else None,
-            "displayPrice": round(display_price, 2) if display_price is not None else None,
-            "regularPrice": round(regular_price, 2) if regular_price is not None else None,
-            "extendedPrice": round(extended_price, 2) if extended_price is not None else None,
-            "previousClose": round(previous_close, 2) if previous_close is not None else None,
-            "change": change,
-            "changePercent": change_percent,
-            "dayHigh": round(day_high, 2) if day_high is not None else None,
-            "dayLow": round(day_low, 2) if day_low is not None else None,
-            "currency": currency,
-            "marketState": market_state,
-            "session": session,
-            **snapshot,
-        }
-    except Exception as e:
-        return {"error": f"伺服器內部錯誤: {str(e)}"}
+    return {"error": f"伺服器內部錯誤: {last_error}" if last_error else f"找不到股票代號: {symbol}"}
 
 
 @app.get("/stock/{symbol}")
