@@ -2,6 +2,7 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 import json
+from urllib.parse import urlparse
 
 from fastapi import FastAPI, Query
 import pandas as pd
@@ -422,6 +423,42 @@ def _attach_indicators(payload, highs, lows, closes, volumes):
     return payload
 
 
+def _parse_news_item(item):
+    content = item.get("content", {}) if isinstance(item, dict) else {}
+    title = content.get("title") or item.get("title")
+    if not title:
+        return None
+
+    raw_url = (
+        (content.get("clickThroughUrl") or {}).get("url")
+        or (content.get("canonicalUrl") or {}).get("url")
+        or item.get("link")
+    )
+    provider = (content.get("provider") or {}).get("displayName") or ""
+    published_at = content.get("pubDate") or content.get("displayTime") or ""
+    summary = content.get("summary") or content.get("description") or ""
+    thumbnail = ((content.get("thumbnail") or {}).get("resolutions") or [{}])
+    image_url = thumbnail[-1].get("url") if thumbnail else None
+
+    domain = ""
+    if raw_url:
+        try:
+            domain = urlparse(raw_url).netloc
+        except Exception:
+            domain = ""
+
+    return {
+        "id": content.get("id") or item.get("id") or title,
+        "title": title,
+        "summary": summary,
+        "url": raw_url,
+        "provider": provider,
+        "publishedAt": published_at,
+        "imageUrl": image_url,
+        "domain": domain,
+    }
+
+
 @app.get("/search")
 def search_symbols(q: str = Query(..., min_length=1), limit: int = Query(8, ge=1, le=20)):
     try:
@@ -481,6 +518,34 @@ def search_symbols(q: str = Query(..., min_length=1), limit: int = Query(8, ge=1
         return {"query": q, "results": results[:limit]}
     except Exception as e:
         return {"error": f"搜尋失敗: {str(e)}", "results": []}
+
+
+@app.get("/news/{symbol}")
+def get_news(symbol: str, limit: int = Query(10, ge=1, le=30)):
+    last_error = None
+
+    for resolved_symbol in candidate_symbols(symbol):
+        try:
+            ticker = yf.Ticker(resolved_symbol)
+            raw_news = getattr(ticker, "news", None) or []
+            normalized = []
+
+            for item in raw_news:
+                parsed = _parse_news_item(item)
+                if parsed and parsed.get("url"):
+                    normalized.append(parsed)
+
+            normalized.sort(key=lambda x: x.get("publishedAt") or "", reverse=True)
+
+            return {
+                "stock": resolved_symbol.upper(),
+                "items": normalized[:limit],
+            }
+        except Exception as e:
+            last_error = str(e)
+            continue
+
+    return {"stock": normalize_symbol(symbol), "items": [], "error": last_error}
 
 
 @app.get("/quote/{symbol}")
