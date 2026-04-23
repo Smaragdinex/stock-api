@@ -756,10 +756,20 @@ def get_stock_data(symbol: str, period: str = "6mo"):
     for resolved_symbol in candidate_symbols(symbol):
         try:
             ticker = yf.Ticker(resolved_symbol)
-            df = ticker.history(period=period, interval=interval, auto_adjust=True)
+
+            df = pd.DataFrame()
+            history_errors = []
+            for auto_adjust in (True, False):
+                try:
+                    df = ticker.history(period=period, interval=interval, auto_adjust=auto_adjust)
+                    if not df.empty:
+                        break
+                except Exception as history_error:
+                    history_errors.append(str(history_error))
+                    df = pd.DataFrame()
 
             if df.empty:
-                last_error = f"找不到股票代號: {resolved_symbol}"
+                last_error = history_errors[-1] if history_errors else f"找不到股票代號: {resolved_symbol}"
                 continue
 
             close_prices = df["Close"]
