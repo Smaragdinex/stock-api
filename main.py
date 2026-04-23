@@ -13,6 +13,7 @@ BASE_DIR = Path(__file__).resolve().parent
 TW_STOCKS_PATH = BASE_DIR / "tw_stocks.json"
 
 _TW_STOCKS_CACHE = None
+_TW_STOCKS_INDEX = None
 
 
 @app.get("/")
@@ -44,6 +45,49 @@ def _load_tw_stocks():
     return _TW_STOCKS_CACHE
 
 
+def _normalize_search_text(text: str) -> str:
+    return "".join(str(text or "").strip().lower().split())
+
+
+def _get_tw_index():
+    global _TW_STOCKS_INDEX
+    if _TW_STOCKS_INDEX is not None:
+        return _TW_STOCKS_INDEX
+
+    stocks = _load_tw_stocks()
+    by_code = {}
+    by_symbol = {}
+    prepared = []
+
+    for item in stocks:
+        symbol = str(item.get("symbol", "")).upper()
+        code = str(item.get("code") or symbol.split(".")[0]).strip()
+        name = str(item.get("name", "")).strip()
+        exchange = item.get("exchange", "")
+        quote_type = item.get("type", "EQUITY")
+
+        prepared_item = {
+            "symbol": symbol,
+            "code": code,
+            "name": name,
+            "exchange": exchange,
+            "type": quote_type,
+            "nameNormalized": _normalize_search_text(name),
+            "symbolNormalized": symbol.lower(),
+            "codeNormalized": code.lower(),
+        }
+        prepared.append(prepared_item)
+        by_symbol[symbol] = prepared_item
+        by_code[code] = prepared_item
+
+    _TW_STOCKS_INDEX = {
+        "prepared": prepared,
+        "by_code": by_code,
+        "by_symbol": by_symbol,
+    }
+    return _TW_STOCKS_INDEX
+
+
 def normalize_symbol(symbol: str) -> str:
     return symbol.strip().upper()
 
@@ -54,11 +98,8 @@ def _lookup_tw_symbol(symbol: str):
         return None
 
     target = normalized.strip()
-    for item in _load_tw_stocks():
-        full_symbol = str(item.get("symbol", "")).upper()
-        if full_symbol.split(".")[0] == target:
-            return full_symbol
-    return None
+    item = _get_tw_index()["by_code"].get(target)
+    return item["symbol"] if item else None
 
 
 def candidate_symbols(symbol: str):
@@ -227,33 +268,44 @@ def _contains_chinese(text: str) -> bool:
 
 
 def _search_tw_stocks(query: str, limit: int):
-    normalized = query.strip().lower()
+    normalized = _normalize_search_text(query)
     if not normalized:
         return []
 
-    stocks = _load_tw_stocks()
-    results = []
+    prepared = _get_tw_index()["prepared"]
+    scored = []
 
-    for item in stocks:
-        symbol = str(item.get("symbol", ""))
-        base_symbol = symbol.split(".")[0].lower()
-        name = str(item.get("name", ""))
-        exchange = item.get("exchange", "TWSE")
-        quote_type = item.get("type", "EQUITY")
+    for item in prepared:
+        score = None
+        code = item["codeNormalized"]
+        symbol = item["symbolNormalized"]
+        name = item["nameNormalized"]
 
-        haystacks = [symbol.lower(), base_symbol, name.lower()]
-        if any(normalized in hay for hay in haystacks):
-            results.append({
-                "symbol": symbol,
-                "name": name,
-                "exchange": exchange,
-                "type": quote_type,
-            })
+        if normalized == code:
+            score = 0
+        elif normalized == symbol:
+            score = 1
+        elif code.startswith(normalized):
+            score = 2
+        elif symbol.startswith(normalized):
+            score = 3
+        elif name.startswith(normalized):
+            score = 4
+        elif normalized in name:
+            score = 5
+        elif normalized in code or normalized in symbol:
+            score = 6
 
-        if len(results) >= limit:
-            break
+        if score is not None:
+            scored.append((score, len(item["code"]), item["code"], {
+                "symbol": item["symbol"],
+                "name": item["name"],
+                "exchange": item["exchange"],
+                "type": item["type"],
+            }))
 
-    return results
+    scored.sort(key=lambda x: (x[0], x[1], x[2]))
+    return [entry[-1] for entry in scored[:limit]]
 
 
 def _is_tw_symbol(symbol: str) -> bool:
@@ -286,6 +338,11 @@ def _tw_search_from_yahoo(query: str, limit: int):
             break
 
     return results
+
+
+def _looks_like_tw_query(query: str) -> bool:
+    stripped = query.strip()
+    return _contains_chinese(stripped) or stripped.isdigit() or stripped.upper().endswith(".TW") or stripped.upper().endswith(".TWO")
 
 
 def _compute_rsi(closes, period=14):
@@ -371,23 +428,27 @@ def search_symbols(q: str = Query(..., min_length=1), limit: int = Query(8, ge=1
         seen = set()
         results = []
         query = q.strip()
-        is_tw_query = _contains_chinese(query) or query.isdigit()
+        is_tw_query = _looks_like_tw_query(query)
 
         if is_tw_query:
-            for item in _search_tw_stocks(query, limit):
+            local_results = _search_tw_stocks(query, limit)
+            for item in local_results:
                 symbol = item["symbol"]
                 if symbol in seen:
                     continue
                 seen.add(symbol)
                 results.append(item)
 
-            if len(results) < limit:
-                for item in _tw_search_from_yahoo(query, limit - len(results)):
-                    symbol = item["symbol"]
-                    if symbol in seen:
-                        continue
-                    seen.add(symbol)
-                    results.append(item)
+            # 台股查詢優先本地清單；只有完全沒命中時才補打 Yahoo
+            if results:
+                return {"query": q, "results": results[:limit]}
+
+            for item in _tw_search_from_yahoo(query, limit):
+                symbol = item["symbol"]
+                if symbol in seen:
+                    continue
+                seen.add(symbol)
+                results.append(item)
 
             if results:
                 return {"query": q, "results": results[:limit]}
