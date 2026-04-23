@@ -128,24 +128,61 @@ def _normalize_session(market_state):
         return "post"
     if "REGULAR" in state or "OPEN" in state:
         return "regular"
+    if "CLOSED" in state or "CLOSE" in state:
+        return "closed"
     return state.lower()
 
 
-def _infer_session_from_time(has_pre_price, has_post_price):
-    ny_now = datetime.now(ZoneInfo("America/New_York"))
-    current_minutes = ny_now.hour * 60 + ny_now.minute
-    pre_start = 4 * 60
-    regular_start = 9 * 60 + 30
-    regular_end = 16 * 60
-    post_end = 20 * 60
+def _is_tw_market_symbol(symbol: str) -> bool:
+    upper = (symbol or "").upper()
+    return upper.endswith(".TW") or upper.endswith(".TWO")
 
-    if pre_start <= current_minutes < regular_start and has_pre_price:
+
+def _market_time_window(symbol: str):
+    if _is_tw_market_symbol(symbol):
+        return {
+            "tz": ZoneInfo("Asia/Taipei"),
+            "pre_start": None,
+            "regular_start": 9 * 60,
+            "regular_end": 13 * 60 + 30,
+            "post_end": None,
+        }
+
+    return {
+        "tz": ZoneInfo("America/New_York"),
+        "pre_start": 4 * 60,
+        "regular_start": 9 * 60 + 30,
+        "regular_end": 16 * 60,
+        "post_end": 20 * 60,
+    }
+
+
+def _current_market_phase(symbol: str):
+    window = _market_time_window(symbol)
+    now = datetime.now(window["tz"])
+    current_minutes = now.hour * 60 + now.minute
+
+    pre_start = window["pre_start"]
+    regular_start = window["regular_start"]
+    regular_end = window["regular_end"]
+    post_end = window["post_end"]
+
+    if pre_start is not None and pre_start <= current_minutes < regular_start:
         return "pre"
-    if regular_end < current_minutes <= post_end and has_post_price:
-        return "post"
     if regular_start <= current_minutes <= regular_end:
         return "regular"
-    return "regular"
+    if post_end is not None and regular_end < current_minutes <= post_end:
+        return "post"
+    return "closed"
+
+
+def _infer_session_from_time(symbol: str, has_pre_price, has_post_price):
+    phase = _current_market_phase(symbol)
+    if phase == "pre":
+        return "pre" if has_pre_price else "closed"
+    if phase == "post":
+        return "post" if has_post_price else "closed"
+    return phase
 
 
 def _company_snapshot(ticker):
@@ -412,7 +449,9 @@ def get_quote(symbol: str):
                     last_error = f"找不到股票代號: {resolved_symbol}"
                     continue
 
-                session = _normalize_session(market_state) or "regular"
+                session = _normalize_session(market_state)
+                if session in (None, "closed"):
+                    session = _infer_session_from_time(resolved_symbol, False, False)
                 change = round(last_price - previous_close, 2) if previous_close is not None else None
                 change_percent = round((change / previous_close) * 100, 2) if previous_close not in (None, 0) and change is not None else None
 
@@ -453,18 +492,35 @@ def get_quote(symbol: str):
             post_price = _safe_float(post_close_prices.iloc[-1]) if not post_close_prices.empty else None
 
             session = _normalize_session(market_state)
-            if session is None:
-                session = _infer_session_from_time(pre_price is not None, post_price is not None)
+            market_phase = _current_market_phase(resolved_symbol)
+            inferred_session = _infer_session_from_time(resolved_symbol, pre_price is not None, post_price is not None)
 
-            if session == "pre":
-                extended_price = pre_price or latest_intraday_price
-                display_price = pre_price or extended_price or latest_intraday_price or last_price or regular_price
-            elif session == "post":
-                extended_price = post_price or latest_intraday_price
-                display_price = post_price or extended_price or latest_intraday_price or last_price or regular_price
+            if session in (None, "closed"):
+                session = inferred_session
+            elif session == "regular" and inferred_session in {"pre", "post"}:
+                session = inferred_session
+
+            if _is_tw_market_symbol(resolved_symbol):
+                extended_price = None
+                display_price = regular_price or last_price or latest_intraday_price
             else:
-                extended_price = post_price or pre_price
-                display_price = regular_price or last_price or latest_intraday_price or extended_price
+                if market_phase == "pre":
+                    session = "pre"
+                    extended_price = pre_price or latest_intraday_price or last_price
+                    display_price = extended_price or regular_price
+                elif market_phase == "post":
+                    session = "post"
+                    extended_price = post_price or latest_intraday_price or last_price
+                    display_price = extended_price or regular_price
+                elif session == "pre":
+                    extended_price = pre_price or latest_intraday_price or last_price
+                    display_price = extended_price or regular_price
+                elif session == "post":
+                    extended_price = post_price or latest_intraday_price or last_price
+                    display_price = extended_price or regular_price
+                else:
+                    extended_price = post_price if session == "closed" else (post_price or pre_price)
+                    display_price = regular_price or last_price or latest_intraday_price or extended_price
 
             if previous_close is None and len(close_prices) > 1:
                 previous_close = _safe_float(close_prices.iloc[-2])
