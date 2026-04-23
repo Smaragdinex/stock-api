@@ -12,6 +12,8 @@ app = FastAPI()
 BASE_DIR = Path(__file__).resolve().parent
 TW_STOCKS_PATH = BASE_DIR / "tw_stocks.json"
 
+_TW_STOCKS_CACHE = None
+
 
 @app.get("/")
 def root():
@@ -25,15 +27,25 @@ def _safe_float(value):
         return None
 
 
+def _load_tw_stocks():
+    global _TW_STOCKS_CACHE
+    if _TW_STOCKS_CACHE is not None:
+        return _TW_STOCKS_CACHE
+
+    if not TW_STOCKS_PATH.exists():
+        _TW_STOCKS_CACHE = []
+        return _TW_STOCKS_CACHE
+
+    try:
+        _TW_STOCKS_CACHE = json.loads(TW_STOCKS_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        _TW_STOCKS_CACHE = []
+
+    return _TW_STOCKS_CACHE
+
+
 def normalize_symbol(symbol: str) -> str:
-    symbol = symbol.strip().upper()
-
-    # 已經有市場尾碼就直接用
-    if "." in symbol:
-        return symbol
-
-    # 純數字先保留原樣，交給 candidate_symbols 自動判斷
-    return symbol
+    return symbol.strip().upper()
 
 
 def _lookup_tw_symbol(symbol: str):
@@ -52,19 +64,20 @@ def _lookup_tw_symbol(symbol: str):
 def candidate_symbols(symbol: str):
     normalized = normalize_symbol(symbol)
 
-    # 已經指定市場
     if "." in normalized:
         return [normalized]
 
-    # 台股數字代碼：優先依本地上市/上櫃清單決定 .TW / .TWO
     if normalized.isdigit():
         resolved_tw_symbol = _lookup_tw_symbol(normalized)
         ordered = []
 
         if resolved_tw_symbol:
             ordered.append(resolved_tw_symbol)
-            sibling = f"{normalized}.TWO" if resolved_tw_symbol.endswith(".TW") else f"{normalized}.TW"
-            ordered.append(sibling)
+
+            if resolved_tw_symbol.endswith(".TW"):
+                ordered.append(f"{normalized}.TWO")
+            elif resolved_tw_symbol.endswith(".TWO"):
+                ordered.append(f"{normalized}.TW")
         else:
             ordered.extend([f"{normalized}.TW", f"{normalized}.TWO"])
 
@@ -76,8 +89,17 @@ def candidate_symbols(symbol: str):
                 deduped.append(item)
         return deduped
 
-    # 其他美股/國際股票
     return [normalized]
+
+
+@app.get("/debug_symbol/{symbol}")
+def debug_symbol(symbol: str):
+    return {
+        "input": symbol,
+        "normalized": normalize_symbol(symbol),
+        "lookup": _lookup_tw_symbol(symbol),
+        "candidates": candidate_symbols(symbol),
+    }
 
 
 def _safe_fast_info(ticker):
@@ -165,15 +187,6 @@ def _company_snapshot(ticker):
 
 def _contains_chinese(text: str) -> bool:
     return any("\u4e00" <= ch <= "\u9fff" for ch in text)
-
-
-def _load_tw_stocks():
-    if not TW_STOCKS_PATH.exists():
-        return []
-    try:
-        return json.loads(TW_STOCKS_PATH.read_text(encoding="utf-8"))
-    except Exception:
-        return []
 
 
 def _search_tw_stocks(query: str, limit: int):
