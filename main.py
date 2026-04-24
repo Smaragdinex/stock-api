@@ -262,6 +262,11 @@ def _default_tw_eps_pe_scenarios(bucket: str):
             {"id": "base", "label": "Base", "epsMultiplier": 0.9, "targetPE": 8.0},
             {"id": "bull", "label": "Bull", "epsMultiplier": 1.1, "targetPE": 10.0},
         ],
+        "building_materials": [
+            {"id": "bear", "label": "Bear", "epsMultiplier": 0.85, "targetPE": 10.0},
+            {"id": "base", "label": "Base", "epsMultiplier": 1.0, "targetPE": 14.0},
+            {"id": "bull", "label": "Bull", "epsMultiplier": 1.15, "targetPE": 18.0},
+        ],
         "chemicals_materials": [
             {"id": "bear", "label": "Bear", "epsMultiplier": 0.9, "targetPE": 8.0},
             {"id": "base", "label": "Base", "epsMultiplier": 1.0, "targetPE": 10.0},
@@ -295,6 +300,8 @@ def _tw_industry_bucket(symbol, info):
         return "financials"
     if "shipping" in industry or "marine shipping" in industry:
         return "shipping"
+    if "building materials" in industry or "glass" in name:
+        return "building_materials"
     if "chemical" in industry or sector == "basic materials":
         return "chemicals_materials"
     if "semiconductor" in industry:
@@ -366,7 +373,7 @@ def _build_tw_valuation_inputs(symbol, info, fast_info):
         "trailingEPS": trailing_eps,
         "forwardEPS": forward_eps,
         "industryBucket": industry_bucket,
-        "notes": f"TW v2 model: Target Price = Expected EPS × Target P/E ({industry_bucket.replace('_', ' ')} bucket).",
+        "notes": f"TW v2.1 model: Target Price = Expected EPS × Target P/E ({industry_bucket.replace('_', ' ')} bucket).",
         "isCalibrated": False,
     }
 
