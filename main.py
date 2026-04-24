@@ -242,6 +242,11 @@ def _default_tw_eps_pe_scenarios(bucket: str):
             {"id": "base", "label": "Base", "epsMultiplier": 1.05, "targetPE": 16.0},
             {"id": "bull", "label": "Bull", "epsMultiplier": 1.15, "targetPE": 20.0},
         ],
+        "high_end_pcb": [
+            {"id": "bear", "label": "Bear", "epsMultiplier": 0.9, "targetPE": 22.0},
+            {"id": "base", "label": "Base", "epsMultiplier": 1.0, "targetPE": 27.0},
+            {"id": "bull", "label": "Bull", "epsMultiplier": 1.1, "targetPE": 30.0},
+        ],
         "electronic_components": [
             {"id": "bear", "label": "Bear", "epsMultiplier": 0.85, "targetPE": 10.0},
             {"id": "base", "label": "Base", "epsMultiplier": 1.0, "targetPE": 14.0},
@@ -252,6 +257,21 @@ def _default_tw_eps_pe_scenarios(bucket: str):
             {"id": "base", "label": "Base", "epsMultiplier": 1.0, "targetPE": 20.0},
             {"id": "bull", "label": "Bull", "epsMultiplier": 1.15, "targetPE": 25.0},
         ],
+        "shipping": [
+            {"id": "bear", "label": "Bear", "epsMultiplier": 0.7, "targetPE": 6.0},
+            {"id": "base", "label": "Base", "epsMultiplier": 0.9, "targetPE": 8.0},
+            {"id": "bull", "label": "Bull", "epsMultiplier": 1.1, "targetPE": 10.0},
+        ],
+        "chemicals_materials": [
+            {"id": "bear", "label": "Bear", "epsMultiplier": 0.9, "targetPE": 8.0},
+            {"id": "base", "label": "Base", "epsMultiplier": 1.0, "targetPE": 10.0},
+            {"id": "bull", "label": "Bull", "epsMultiplier": 1.1, "targetPE": 12.0},
+        ],
+        "financials": [
+            {"id": "bear", "label": "Bear", "epsMultiplier": 0.9, "targetPE": 8.0},
+            {"id": "base", "label": "Base", "epsMultiplier": 1.0, "targetPE": 10.0},
+            {"id": "bull", "label": "Bull", "epsMultiplier": 1.1, "targetPE": 12.0},
+        ],
         "default": [
             {"id": "bear", "label": "Bear", "epsMultiplier": 0.9, "targetPE": 10.0},
             {"id": "base", "label": "Base", "epsMultiplier": 1.0, "targetPE": 14.0},
@@ -261,15 +281,25 @@ def _default_tw_eps_pe_scenarios(bucket: str):
     return presets.get(bucket, presets["default"])
 
 
-def _tw_industry_bucket(info):
+def _tw_industry_bucket(symbol, info):
     industry = (info.get("industry") or "").lower()
     sector = (info.get("sector") or "").lower()
+    name = (info.get("longName") or info.get("shortName") or "").lower()
+    upper_symbol = (symbol or "").upper()
 
+    if upper_symbol in {"2313.TW", "2368.TW", "2383.TW"}:
+        return "high_end_pcb"
     if "food" in industry or "packaged foods" in industry or sector == "consumer defensive":
         return "food"
+    if "insurance" in industry or sector == "financial services":
+        return "financials"
+    if "shipping" in industry or "marine shipping" in industry:
+        return "shipping"
+    if "chemical" in industry or sector == "basic materials":
+        return "chemicals_materials"
     if "semiconductor" in industry:
         return "semiconductors"
-    if "electronic component" in industry or "printed circuit" in industry or "computer hardware" in industry:
+    if "electronic component" in industry or "printed circuit" in industry or "computer hardware" in industry or "pcb" in name or "satellite" in name or "hdi" in name:
         return "electronic_components"
     return "default"
 
@@ -326,7 +356,7 @@ def _build_tw_valuation_inputs(symbol, info, fast_info):
     trailing_eps = _safe_float(info.get("trailingEps") or info.get("epsTrailingTwelveMonths"))
     forward_eps = _safe_float(info.get("forwardEps"))
     base_eps = forward_eps or trailing_eps
-    industry_bucket = _tw_industry_bucket(info)
+    industry_bucket = _tw_industry_bucket(symbol, info)
 
     return {
         "modelType": "eps_pe",
@@ -336,7 +366,7 @@ def _build_tw_valuation_inputs(symbol, info, fast_info):
         "trailingEPS": trailing_eps,
         "forwardEPS": forward_eps,
         "industryBucket": industry_bucket,
-        "notes": f"TW v1 model: Target Price = Expected EPS × Target P/E ({industry_bucket.replace('_', ' ')} bucket).",
+        "notes": f"TW v2 model: Target Price = Expected EPS × Target P/E ({industry_bucket.replace('_', ' ')} bucket).",
         "isCalibrated": False,
     }
 
