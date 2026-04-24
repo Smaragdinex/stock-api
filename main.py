@@ -235,6 +235,45 @@ def _default_valuation_scenarios():
     ]
 
 
+def _default_tw_eps_pe_scenarios(bucket: str):
+    presets = {
+        "food": [
+            {"id": "bear", "label": "Bear", "epsMultiplier": 0.95, "targetPE": 12.0},
+            {"id": "base", "label": "Base", "epsMultiplier": 1.05, "targetPE": 16.0},
+            {"id": "bull", "label": "Bull", "epsMultiplier": 1.15, "targetPE": 20.0},
+        ],
+        "electronic_components": [
+            {"id": "bear", "label": "Bear", "epsMultiplier": 0.85, "targetPE": 10.0},
+            {"id": "base", "label": "Base", "epsMultiplier": 1.0, "targetPE": 14.0},
+            {"id": "bull", "label": "Bull", "epsMultiplier": 1.15, "targetPE": 18.0},
+        ],
+        "semiconductors": [
+            {"id": "bear", "label": "Bear", "epsMultiplier": 0.9, "targetPE": 15.0},
+            {"id": "base", "label": "Base", "epsMultiplier": 1.0, "targetPE": 20.0},
+            {"id": "bull", "label": "Bull", "epsMultiplier": 1.15, "targetPE": 25.0},
+        ],
+        "default": [
+            {"id": "bear", "label": "Bear", "epsMultiplier": 0.9, "targetPE": 10.0},
+            {"id": "base", "label": "Base", "epsMultiplier": 1.0, "targetPE": 14.0},
+            {"id": "bull", "label": "Bull", "epsMultiplier": 1.15, "targetPE": 18.0},
+        ],
+    }
+    return presets.get(bucket, presets["default"])
+
+
+def _tw_industry_bucket(info):
+    industry = (info.get("industry") or "").lower()
+    sector = (info.get("sector") or "").lower()
+
+    if "food" in industry or "packaged foods" in industry or sector == "consumer defensive":
+        return "food"
+    if "semiconductor" in industry:
+        return "semiconductors"
+    if "electronic component" in industry or "printed circuit" in industry or "computer hardware" in industry:
+        return "electronic_components"
+    return "default"
+
+
 def _valuation_overrides(symbol: str):
     overrides = {
         "MRVL": {
@@ -246,7 +285,7 @@ def _valuation_overrides(symbol: str):
     return overrides.get((symbol or '').upper(), {})
 
 
-def _build_valuation_inputs(symbol, info, fast_info):
+def _build_us_valuation_inputs(symbol, info, fast_info):
     overrides = _valuation_overrides(symbol)
 
     current_price = _safe_float(
@@ -267,12 +306,38 @@ def _build_valuation_inputs(symbol, info, fast_info):
     holding_years = int(overrides.get("holdingYears") or 3)
 
     return {
+        "modelType": "revenue_exit_pe",
+        "holdingYears": holding_years,
         "currentPrice": current_price,
         "currentRevenuePerShare": current_revenue_per_share,
         "normalizedRevenuePerShare": normalized_revenue_per_share,
-        "holdingYears": holding_years,
         "notes": overrides.get("notes"),
         "isCalibrated": normalized_revenue_per_share != current_revenue_per_share if normalized_revenue_per_share is not None and current_revenue_per_share is not None else False,
+    }
+
+
+def _build_tw_valuation_inputs(symbol, info, fast_info):
+    current_price = _safe_float(
+        info.get("currentPrice")
+        or info.get("regularMarketPrice")
+        or fast_info.get("lastPrice")
+        or fast_info.get("regularMarketPrice")
+    )
+    trailing_eps = _safe_float(info.get("trailingEps") or info.get("epsTrailingTwelveMonths"))
+    forward_eps = _safe_float(info.get("forwardEps"))
+    base_eps = forward_eps or trailing_eps
+    industry_bucket = _tw_industry_bucket(info)
+
+    return {
+        "modelType": "eps_pe",
+        "holdingYears": 1,
+        "currentPrice": current_price,
+        "baseEPS": base_eps,
+        "trailingEPS": trailing_eps,
+        "forwardEPS": forward_eps,
+        "industryBucket": industry_bucket,
+        "notes": f"TW v1 model: Target Price = Expected EPS × Target P/E ({industry_bucket.replace('_', ' ')} bucket).",
+        "isCalibrated": False,
     }
 
 
@@ -289,8 +354,8 @@ def _compute_expected_return(target_price, current_price, holding_years):
         return None
 
 
-def _build_valuation_payload(symbol, info, fast_info, scenarios=None):
-    inputs = _build_valuation_inputs(symbol, info, fast_info)
+def _build_us_valuation_payload(symbol, info, fast_info, scenarios=None):
+    inputs = _build_us_valuation_inputs(symbol, info, fast_info)
     scenario_defs = scenarios or _default_valuation_scenarios()
     outputs = []
 
@@ -313,20 +378,76 @@ def _build_valuation_payload(symbol, info, fast_info, scenarios=None):
             "revenueGrowthRate": scenario["revenueGrowthRate"],
             "expectedNetMargin": scenario["expectedNetMargin"],
             "exitPE": scenario["exitPE"],
+            "targetPE": None,
+            "expectedEPS": None,
             "targetPrice": round(target_price, 2) if target_price is not None else None,
             "expectedReturn": round(expected_return, 4) if expected_return is not None else None,
         })
 
     return {
         "stock": symbol.upper(),
+        "modelType": inputs["modelType"],
         "holdingYears": inputs["holdingYears"],
         "currentPrice": round(inputs["currentPrice"], 2) if inputs["currentPrice"] is not None else None,
         "currentRevenuePerShare": round(inputs["currentRevenuePerShare"], 4) if inputs["currentRevenuePerShare"] is not None else None,
         "normalizedRevenuePerShare": round(inputs["normalizedRevenuePerShare"], 4) if inputs["normalizedRevenuePerShare"] is not None else None,
+        "baseEPS": None,
+        "trailingEPS": None,
+        "forwardEPS": None,
+        "industryBucket": None,
         "isCalibrated": inputs["isCalibrated"],
         "notes": inputs["notes"],
         "scenarios": outputs,
     }
+
+
+def _build_tw_valuation_payload(symbol, info, fast_info):
+    inputs = _build_tw_valuation_inputs(symbol, info, fast_info)
+    scenario_defs = _default_tw_eps_pe_scenarios(inputs["industryBucket"])
+    outputs = []
+
+    for scenario in scenario_defs:
+        target_price = None
+        expected_return = None
+        expected_eps = None
+        if inputs["baseEPS"] not in (None, 0):
+            expected_eps = inputs["baseEPS"] * scenario["epsMultiplier"]
+            target_price = expected_eps * scenario["targetPE"]
+            expected_return = _compute_expected_return(target_price, inputs["currentPrice"], inputs["holdingYears"])
+
+        outputs.append({
+            "id": scenario["id"],
+            "label": scenario["label"],
+            "revenueGrowthRate": None,
+            "expectedNetMargin": None,
+            "exitPE": None,
+            "targetPE": scenario["targetPE"],
+            "expectedEPS": round(expected_eps, 2) if expected_eps is not None else None,
+            "targetPrice": round(target_price, 2) if target_price is not None else None,
+            "expectedReturn": round(expected_return, 4) if expected_return is not None else None,
+        })
+
+    return {
+        "stock": symbol.upper(),
+        "modelType": inputs["modelType"],
+        "holdingYears": inputs["holdingYears"],
+        "currentPrice": round(inputs["currentPrice"], 2) if inputs["currentPrice"] is not None else None,
+        "currentRevenuePerShare": None,
+        "normalizedRevenuePerShare": None,
+        "baseEPS": round(inputs["baseEPS"], 2) if inputs["baseEPS"] is not None else None,
+        "trailingEPS": round(inputs["trailingEPS"], 2) if inputs["trailingEPS"] is not None else None,
+        "forwardEPS": round(inputs["forwardEPS"], 2) if inputs["forwardEPS"] is not None else None,
+        "industryBucket": inputs["industryBucket"],
+        "isCalibrated": inputs["isCalibrated"],
+        "notes": inputs["notes"],
+        "scenarios": outputs,
+    }
+
+
+def _build_valuation_payload(symbol, info, fast_info, scenarios=None):
+    if _is_tw_market_symbol(symbol):
+        return _build_tw_valuation_payload(symbol, info, fast_info)
+    return _build_us_valuation_payload(symbol, info, fast_info, scenarios=scenarios)
 
 
 def _company_snapshot(ticker):
@@ -798,7 +919,9 @@ def get_valuation(symbol: str):
             fast_info = _safe_fast_info(ticker)
             payload = _build_valuation_payload(resolved_symbol, info, fast_info)
 
-            if payload.get("normalizedRevenuePerShare") is None:
+            if payload.get("modelType") == "revenue_exit_pe" and payload.get("normalizedRevenuePerShare") is None:
+                payload["error"] = "Valuation inputs unavailable"
+            elif payload.get("modelType") == "eps_pe" and payload.get("baseEPS") is None:
                 payload["error"] = "Valuation inputs unavailable"
             return payload
         except Exception as e:
