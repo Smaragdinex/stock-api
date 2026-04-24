@@ -331,6 +331,10 @@ def _build_us_valuation_inputs(symbol, info, fast_info):
         or fast_info.get("lastPrice")
         or fast_info.get("regularMarketPrice")
     )
+    analyst_target_low = _safe_float(info.get("targetLowPrice"))
+    analyst_target_mean = _safe_float(info.get("targetMeanPrice") or info.get("targetMedianPrice"))
+    analyst_target_high = _safe_float(info.get("targetHighPrice"))
+    analyst_count = int(info.get("numberOfAnalystOpinions") or 0)
     current_revenue_per_share = _safe_float(info.get("revenuePerShare"))
 
     if current_revenue_per_share is None:
@@ -348,6 +352,10 @@ def _build_us_valuation_inputs(symbol, info, fast_info):
         "currentPrice": current_price,
         "currentRevenuePerShare": current_revenue_per_share,
         "normalizedRevenuePerShare": normalized_revenue_per_share,
+        "analystTargetLow": analyst_target_low,
+        "analystTargetMean": analyst_target_mean,
+        "analystTargetHigh": analyst_target_high,
+        "analystCount": analyst_count,
         "notes": overrides.get("notes"),
         "isCalibrated": normalized_revenue_per_share != current_revenue_per_share if normalized_revenue_per_share is not None and current_revenue_per_share is not None else False,
     }
@@ -373,6 +381,10 @@ def _build_tw_valuation_inputs(symbol, info, fast_info):
         "trailingEPS": trailing_eps,
         "forwardEPS": forward_eps,
         "industryBucket": industry_bucket,
+        "analystTargetLow": None,
+        "analystTargetMean": None,
+        "analystTargetHigh": None,
+        "analystCount": 0,
         "notes": f"TW v2.1 model: Target Price = Expected EPS × Target P/E ({industry_bucket.replace('_', ' ')} bucket).",
         "isCalibrated": False,
     }
@@ -409,6 +421,12 @@ def _build_us_valuation_payload(symbol, info, fast_info, scenarios=None):
             )
             expected_return = _compute_expected_return(target_price, inputs["currentPrice"], inputs["holdingYears"])
 
+        composite_target_price = None
+        if target_price is not None and inputs["analystTargetMean"] is not None:
+            composite_target_price = (target_price * 0.4) + (inputs["analystTargetMean"] * 0.6)
+        elif target_price is not None:
+            composite_target_price = target_price
+
         outputs.append({
             "id": scenario["id"],
             "label": scenario["label"],
@@ -418,6 +436,7 @@ def _build_us_valuation_payload(symbol, info, fast_info, scenarios=None):
             "targetPE": None,
             "expectedEPS": None,
             "targetPrice": round(target_price, 2) if target_price is not None else None,
+            "compositeTargetPrice": round(composite_target_price, 2) if composite_target_price is not None else None,
             "expectedReturn": round(expected_return, 4) if expected_return is not None else None,
         })
 
@@ -432,6 +451,10 @@ def _build_us_valuation_payload(symbol, info, fast_info, scenarios=None):
         "trailingEPS": None,
         "forwardEPS": None,
         "industryBucket": None,
+        "analystTargetLow": round(inputs["analystTargetLow"], 2) if inputs["analystTargetLow"] is not None else None,
+        "analystTargetMean": round(inputs["analystTargetMean"], 2) if inputs["analystTargetMean"] is not None else None,
+        "analystTargetHigh": round(inputs["analystTargetHigh"], 2) if inputs["analystTargetHigh"] is not None else None,
+        "analystCount": inputs["analystCount"],
         "isCalibrated": inputs["isCalibrated"],
         "notes": inputs["notes"],
         "scenarios": outputs,
@@ -461,6 +484,7 @@ def _build_tw_valuation_payload(symbol, info, fast_info):
             "targetPE": scenario["targetPE"],
             "expectedEPS": round(expected_eps, 2) if expected_eps is not None else None,
             "targetPrice": round(target_price, 2) if target_price is not None else None,
+            "compositeTargetPrice": None,
             "expectedReturn": round(expected_return, 4) if expected_return is not None else None,
         })
 
@@ -475,6 +499,10 @@ def _build_tw_valuation_payload(symbol, info, fast_info):
         "trailingEPS": round(inputs["trailingEPS"], 2) if inputs["trailingEPS"] is not None else None,
         "forwardEPS": round(inputs["forwardEPS"], 2) if inputs["forwardEPS"] is not None else None,
         "industryBucket": inputs["industryBucket"],
+        "analystTargetLow": None,
+        "analystTargetMean": None,
+        "analystTargetHigh": None,
+        "analystCount": 0,
         "isCalibrated": inputs["isCalibrated"],
         "notes": inputs["notes"],
         "scenarios": outputs,
