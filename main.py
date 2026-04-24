@@ -1003,16 +1003,21 @@ def get_stock_data(symbol: str, period: str = "6mo"):
                         date_str = ts.strftime("%Y-%m-%d")
                         chart_label = ts.strftime("%m-%d")
 
+                    if pd.isnull(close_prices.iloc[i]) or pd.isnull(high_prices.iloc[i]) or pd.isnull(low_prices.iloc[i]):
+                        continue
+
                     price_val = float(close_prices.iloc[i])
                     ma5_val = float(ma5.iloc[i]) if pd.notnull(ma5.iloc[i]) else None
+                    high_val = float(high_prices.iloc[i])
+                    low_val = float(low_prices.iloc[i])
 
                     result.append({
                         "date": date_str,
                         "chartLabel": chart_label,
                         "price": round(price_val, 2),
                         "ma5": round(ma5_val, 2) if ma5_val is not None else None,
-                        "high": round(float(high_prices.iloc[i]), 2),
-                        "low": round(float(low_prices.iloc[i]), 2),
+                        "high": round(high_val, 2),
+                        "low": round(low_val, 2),
                         "volume": float(volume_series.iloc[i]) if pd.notnull(volume_series.iloc[i]) else 0.0,
                     })
                 except Exception:
