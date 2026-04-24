@@ -227,6 +227,86 @@ def _infer_session_from_time(symbol: str, has_pre_price, has_post_price):
     return phase
 
 
+def _default_valuation_scenarios():
+    return [
+        {"id": "bear", "label": "Bear", "revenueGrowthRate": 0.15, "expectedNetMargin": 0.25, "exitPE": 20.0},
+        {"id": "base", "label": "Base", "revenueGrowthRate": 0.28, "expectedNetMargin": 0.30, "exitPE": 30.0},
+        {"id": "bull", "label": "Bull", "revenueGrowthRate": 0.35, "expectedNetMargin": 0.35, "exitPE": 40.0},
+    ]
+
+
+def _build_valuation_inputs(info, fast_info):
+    current_price = _safe_float(
+        info.get("currentPrice")
+        or info.get("regularMarketPrice")
+        or fast_info.get("lastPrice")
+        or fast_info.get("regularMarketPrice")
+    )
+    current_revenue_per_share = _safe_float(info.get("revenuePerShare"))
+
+    if current_revenue_per_share is None:
+        total_revenue = _safe_float(info.get("totalRevenue"))
+        shares_outstanding = _safe_float(info.get("sharesOutstanding") or fast_info.get("shares"))
+        if total_revenue not in (None, 0) and shares_outstanding not in (None, 0):
+            current_revenue_per_share = total_revenue / shares_outstanding
+
+    return {
+        "currentPrice": current_price,
+        "currentRevenuePerShare": current_revenue_per_share,
+        "holdingYears": 3,
+    }
+
+
+def _compute_target_price(current_revenue_per_share, revenue_growth_rate, holding_years, expected_net_margin, exit_pe):
+    return current_revenue_per_share * pow(1 + revenue_growth_rate, holding_years) * expected_net_margin * exit_pe
+
+
+def _compute_expected_return(target_price, current_price, holding_years):
+    if target_price in (None, 0) or current_price in (None, 0) or holding_years in (None, 0):
+        return None
+    try:
+        return pow(target_price / current_price, 1.0 / holding_years) - 1
+    except Exception:
+        return None
+
+
+def _build_valuation_payload(symbol, info, fast_info, scenarios=None):
+    inputs = _build_valuation_inputs(info, fast_info)
+    scenario_defs = scenarios or _default_valuation_scenarios()
+    outputs = []
+
+    for scenario in scenario_defs:
+        target_price = None
+        expected_return = None
+        if inputs["currentRevenuePerShare"] not in (None, 0):
+            target_price = _compute_target_price(
+                inputs["currentRevenuePerShare"],
+                scenario["revenueGrowthRate"],
+                inputs["holdingYears"],
+                scenario["expectedNetMargin"],
+                scenario["exitPE"],
+            )
+            expected_return = _compute_expected_return(target_price, inputs["currentPrice"], inputs["holdingYears"])
+
+        outputs.append({
+            "id": scenario["id"],
+            "label": scenario["label"],
+            "revenueGrowthRate": scenario["revenueGrowthRate"],
+            "expectedNetMargin": scenario["expectedNetMargin"],
+            "exitPE": scenario["exitPE"],
+            "targetPrice": round(target_price, 2) if target_price is not None else None,
+            "expectedReturn": round(expected_return, 4) if expected_return is not None else None,
+        })
+
+    return {
+        "stock": symbol.upper(),
+        "holdingYears": inputs["holdingYears"],
+        "currentPrice": round(inputs["currentPrice"], 2) if inputs["currentPrice"] is not None else None,
+        "currentRevenuePerShare": round(inputs["currentRevenuePerShare"], 4) if inputs["currentRevenuePerShare"] is not None else None,
+        "scenarios": outputs,
+    }
+
+
 def _company_snapshot(ticker):
     info = _safe_info(ticker)
     fast_info = _safe_fast_info(ticker)
@@ -252,6 +332,8 @@ def _company_snapshot(ticker):
     else:
         dividend_yield = dividend_yield_raw
 
+    valuation = _build_valuation_payload(ticker.ticker if hasattr(ticker, "ticker") else (company_name or "UNKNOWN"), info, fast_info)
+
     return {
         "companyName": company_name,
         "marketCap": market_cap,
@@ -261,6 +343,7 @@ def _company_snapshot(ticker):
         "eps": eps,
         "peRatio": pe_ratio,
         "dividendYield": dividend_yield,
+        "valuation": valuation,
     }
 
 
@@ -680,6 +763,34 @@ def get_earnings(symbol: str, limit: int = Query(5, ge=1, le=8)):
             continue
 
     return {"stock": normalize_symbol(symbol), "items": [], "error": last_error}
+
+
+@app.get("/valuation/{symbol}")
+def get_valuation(symbol: str):
+    last_error = None
+
+    for resolved_symbol in candidate_symbols(symbol):
+        try:
+            ticker = yf.Ticker(resolved_symbol)
+            info = _safe_info(ticker)
+            fast_info = _safe_fast_info(ticker)
+            payload = _build_valuation_payload(resolved_symbol, info, fast_info)
+
+            if payload.get("currentRevenuePerShare") is None:
+                payload["error"] = "Valuation inputs unavailable"
+            return payload
+        except Exception as e:
+            last_error = str(e)
+            continue
+
+    return {
+        "stock": normalize_symbol(symbol),
+        "holdingYears": 3,
+        "currentPrice": None,
+        "currentRevenuePerShare": None,
+        "scenarios": [],
+        "error": last_error or "Valuation inputs unavailable",
+    }
 
 
 @app.get("/quote/{symbol}")
