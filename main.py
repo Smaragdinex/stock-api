@@ -835,14 +835,14 @@ def _contains_enough_cjk(text: str) -> bool:
 
 def _sanitize_llm_tomorrow_output(raw: dict, fallback_price: float | None = None):
     bias = str(raw.get("bias") or "neutral").strip().lower()
-    if bias not in {"up", "down", "flat", "neutral", "bullish", "bearish", "positive", "negative"}:
+    if bias not in {"up", "down", "flat", "neutral", "bullish", "bearish", "positive", "negative", "mixed", "cautious"}:
         bias = "neutral"
 
     if bias in {"bullish", "positive"}:
         bias = "up"
     elif bias in {"bearish", "negative"}:
         bias = "down"
-    elif bias == "neutral":
+    elif bias in {"neutral", "mixed", "cautious"}:
         bias = "flat"
 
     predicted_low = _safe_float(raw.get("predictedLow"))
@@ -863,6 +863,14 @@ def _sanitize_llm_tomorrow_output(raw: dict, fallback_price: float | None = None
         elif "low" in confidence:
             confidence = "low"
         else:
+            confidence = "medium"
+
+    if bias == "down" and confidence == "high":
+        predicted_mid = None
+        if predicted_low is not None and predicted_high is not None:
+            predicted_mid = (predicted_low + predicted_high) / 2
+        if fallback_price is not None and (predicted_mid is None or predicted_mid >= fallback_price * 0.99):
+            bias = "flat"
             confidence = "medium"
 
     news_impact = str(raw.get("newsImpact") or "neutral").strip().lower()
@@ -1044,13 +1052,20 @@ def get_llm_tomorrow(symbol: str, lang: str = Query("en")):
     language_instruction = "Respond in Traditional Chinese." if normalized_lang == "zh" else "Respond in English."
 
     prompt = f"""
-You are a conservative stock-analysis assistant.
-Return only valid JSON with keys: bias, predictedLow, predictedHigh, confidence, summary.
+You are a balanced stock-analysis assistant.
+Return only valid JSON with keys: bias, predictedLow, predictedHigh, confidence, summary, newsImpact, newsSummary.
 Use bias from: up, down, flat.
 Use confidence from: low, medium, high.
 Summary must be one short sentence under 220 characters.
 Do not include markdown.
 {language_instruction}
+
+Important rules:
+- Weigh bullish and bearish evidence fairly.
+- If the evidence is mixed or unclear, use flat.
+- Use down only when the negative evidence is clear and dominant.
+- Do not assign high confidence to down unless the projected range is clearly below current price.
+- Use high confidence only when the evidence is strong and aligned.
 
 Stock: {normalize_symbol(symbol)}
 Current price: {current_price}
@@ -1070,7 +1085,7 @@ Recent earnings items: {earnings_payload.get('items')}
 Top news headlines: {latest_news_titles}
 
 Estimate only the next trading day's likely price range and directional bias using the provided data.
-Be conservative and realistic.
+Be balanced, realistic, and avoid one-sided pessimism.
 """.strip()
 
     schema = {
