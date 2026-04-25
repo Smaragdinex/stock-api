@@ -3,6 +3,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 import json
 from urllib.parse import urlparse
+from urllib.request import Request, urlopen
 
 from fastapi import FastAPI, Query
 import pandas as pd
@@ -805,6 +806,68 @@ def _cache_set(bucket: str, key, payload):
     return payload
 
 
+def _ollama_generate(prompt: str, schema: dict | None = None, model: str = "qwen2.5:14b"):
+    payload = {
+        "model": model,
+        "prompt": prompt,
+        "stream": False,
+    }
+    if schema:
+        payload["format"] = schema
+
+    req = Request(
+        "http://127.0.0.1:11434/api/generate",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+    )
+    with urlopen(req, timeout=300) as response:
+        data = json.loads(response.read().decode("utf-8"))
+    return data.get("response", "")
+
+
+def _sanitize_llm_tomorrow_output(raw: dict, fallback_price: float | None = None):
+    bias = str(raw.get("bias") or "neutral").strip().lower()
+    if bias not in {"up", "down", "flat", "neutral", "bullish", "bearish", "positive", "negative"}:
+        bias = "neutral"
+
+    if bias in {"bullish", "positive"}:
+        bias = "up"
+    elif bias in {"bearish", "negative"}:
+        bias = "down"
+    elif bias == "neutral":
+        bias = "flat"
+
+    predicted_low = _safe_float(raw.get("predictedLow"))
+    predicted_high = _safe_float(raw.get("predictedHigh"))
+    if predicted_low is not None and predicted_high is not None and predicted_low > predicted_high:
+        predicted_low, predicted_high = predicted_high, predicted_low
+
+    if fallback_price is not None:
+        if predicted_low is None:
+            predicted_low = round(fallback_price * 0.98, 2)
+        if predicted_high is None:
+            predicted_high = round(fallback_price * 1.02, 2)
+
+    confidence = str(raw.get("confidence") or "medium").strip().lower()
+    if confidence not in {"low", "medium", "high"}:
+        if "high" in confidence:
+            confidence = "high"
+        elif "low" in confidence:
+            confidence = "low"
+        else:
+            confidence = "medium"
+
+    summary = str(raw.get("summary") or "")[:280].strip()
+
+    return {
+        "bias": bias,
+        "predictedLow": round(predicted_low, 2) if predicted_low is not None else None,
+        "predictedHigh": round(predicted_high, 2) if predicted_high is not None else None,
+        "confidence": confidence,
+        "summary": summary,
+    }
+
+
 def _signal_from_indicators(rsi, mfi):
     if rsi is None and mfi is None:
         return "-"
@@ -934,6 +997,93 @@ def get_watchlist(symbols: str = Query(..., min_length=1)):
             deduped.append(item)
 
     return _cached_watchlist_response(deduped)
+
+
+@app.get("/llm-tomorrow/{symbol}")
+def get_llm_tomorrow(symbol: str):
+    cache_key = normalize_symbol(symbol)
+    cached = _cache_get("llm_tomorrow", cache_key, 300)
+    if cached is not None:
+        return cached
+
+    stock_payload = get_stock_data(symbol, period="1mo")
+    quote_payload = get_quote(symbol)
+    earnings_payload = get_earnings(symbol, limit=4)
+    ratings_payload = get_ratings(symbol)
+    valuation_payload = get_valuation(symbol)
+    news_payload = get_news(symbol, limit=5)
+
+    current_price = _safe_float(
+        quote_payload.get("regularPrice")
+        or quote_payload.get("displayPrice")
+        or quote_payload.get("price")
+    )
+
+    latest_news_titles = [item.get("title") for item in news_payload.get("items", [])[:3] if item.get("title")]
+
+    prompt = f"""
+You are a conservative stock-analysis assistant.
+Return only valid JSON with keys: bias, predictedLow, predictedHigh, confidence, summary.
+Use bias from: up, down, flat.
+Use confidence from: low, medium, high.
+Summary must be one short sentence under 220 characters.
+Do not include markdown.
+
+Stock: {normalize_symbol(symbol)}
+Current price: {current_price}
+Session: {quote_payload.get('session')}
+Change: {quote_payload.get('change')}
+Change percent: {quote_payload.get('changePercent')}
+RSI: {stock_payload.get('rsi')}
+MFI: {stock_payload.get('mfi')}
+Signal: {stock_payload.get('signal')}
+Analyst mean target: {valuation_payload.get('analystTargetMean')}
+Analyst count: {valuation_payload.get('analystCount')}
+Valuation scenarios: {valuation_payload.get('scenarios')}
+Ratings total: {ratings_payload.get('total')}
+Ratings strongBuy: {ratings_payload.get('strongBuy')}, buy: {ratings_payload.get('buy')}, hold: {ratings_payload.get('hold')}, sell: {ratings_payload.get('sell')}, strongSell: {ratings_payload.get('strongSell')}
+Earnings next date: {earnings_payload.get('nextEarningsDate')}
+Recent earnings items: {earnings_payload.get('items')}
+Top news headlines: {latest_news_titles}
+
+Estimate only the next trading day's likely price range and directional bias using the provided data.
+Be conservative and realistic.
+""".strip()
+
+    schema = {
+        "type": "object",
+        "properties": {
+            "bias": {"type": "string"},
+            "predictedLow": {"type": "number"},
+            "predictedHigh": {"type": "number"},
+            "confidence": {"type": "string"},
+            "summary": {"type": "string"},
+        },
+        "required": ["bias", "predictedLow", "predictedHigh", "confidence", "summary"],
+    }
+
+    try:
+        raw_response = _ollama_generate(prompt, schema=schema)
+        parsed = json.loads(raw_response)
+        cleaned = _sanitize_llm_tomorrow_output(parsed, fallback_price=current_price)
+        payload = {
+            "stock": normalize_symbol(symbol),
+            **cleaned,
+            "source": "ollama:qwen2.5:14b",
+        }
+        return _cache_set("llm_tomorrow", cache_key, payload)
+    except Exception as e:
+        fallback = {
+            "stock": normalize_symbol(symbol),
+            "bias": "flat",
+            "predictedLow": round(current_price * 0.98, 2) if current_price is not None else None,
+            "predictedHigh": round(current_price * 1.02, 2) if current_price is not None else None,
+            "confidence": "low",
+            "summary": "Local LLM response unavailable; showing fallback range.",
+            "source": "fallback",
+            "error": str(e),
+        }
+        return _cache_set("llm_tomorrow", cache_key, fallback)
 
 
 @app.get("/news/{symbol}")
