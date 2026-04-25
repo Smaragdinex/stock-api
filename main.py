@@ -322,26 +322,60 @@ def _valuation_overrides(symbol: str):
     return overrides.get((symbol or '').upper(), {})
 
 
+def _resolved_current_price(info, fast_info):
+    return _safe_float(
+        (info or {}).get("currentPrice")
+        or (info or {}).get("regularMarketPrice")
+        or (fast_info or {}).get("lastPrice")
+        or (fast_info or {}).get("regularMarketPrice")
+    )
+
+
+def _adr_adjusted_revenue_per_share(symbol, info, fast_info):
+    upper = (symbol or "").upper()
+    if upper != "TSM":
+        return None
+
+    revenue_per_share = _safe_float((info or {}).get("revenuePerShare"))
+    shares_outstanding = _safe_float((info or {}).get("sharesOutstanding") or (fast_info or {}).get("shares"))
+    total_revenue = _safe_float((info or {}).get("totalRevenue"))
+
+    if revenue_per_share in (None, 0) or shares_outstanding in (None, 0) or total_revenue in (None, 0):
+        return None
+
+    implied_shares = total_revenue / revenue_per_share if revenue_per_share not in (None, 0) else None
+    if implied_shares in (None, 0):
+        return None
+
+    adr_ratio = implied_shares / shares_outstanding
+    if adr_ratio <= 1:
+        return None
+
+    return revenue_per_share / adr_ratio
+
+
 def _build_us_valuation_inputs(symbol, info, fast_info):
     overrides = _valuation_overrides(symbol)
 
-    current_price = _safe_float(
-        info.get("currentPrice")
-        or info.get("regularMarketPrice")
-        or fast_info.get("lastPrice")
-        or fast_info.get("regularMarketPrice")
-    )
+    current_price = _resolved_current_price(info, fast_info)
     analyst_target_low = _safe_float(info.get("targetLowPrice"))
     analyst_target_mean = _safe_float(info.get("targetMeanPrice") or info.get("targetMedianPrice"))
     analyst_target_high = _safe_float(info.get("targetHighPrice"))
     analyst_count = int(info.get("numberOfAnalystOpinions") or 0)
-    current_revenue_per_share = _safe_float(info.get("revenuePerShare"))
+    current_revenue_per_share = _adr_adjusted_revenue_per_share(symbol, info, fast_info)
+    notes = overrides.get("notes")
+
+    if current_revenue_per_share is None:
+        current_revenue_per_share = _safe_float(info.get("revenuePerShare"))
 
     if current_revenue_per_share is None:
         total_revenue = _safe_float(info.get("totalRevenue"))
         shares_outstanding = _safe_float(info.get("sharesOutstanding") or fast_info.get("shares"))
         if total_revenue not in (None, 0) and shares_outstanding not in (None, 0):
             current_revenue_per_share = total_revenue / shares_outstanding
+
+    if (symbol or '').upper() == 'TSM' and current_revenue_per_share is not None:
+        notes = ((notes + " ") if notes else "") + "ADR revenue/share adjusted to avoid mixing Taiwan issuer revenue with ADR share count."
 
     normalized_revenue_per_share = _safe_float(overrides.get("normalizedRevenuePerShare")) or current_revenue_per_share
     holding_years = int(overrides.get("holdingYears") or 3)
@@ -356,7 +390,7 @@ def _build_us_valuation_inputs(symbol, info, fast_info):
         "analystTargetMean": analyst_target_mean,
         "analystTargetHigh": analyst_target_high,
         "analystCount": analyst_count,
-        "notes": overrides.get("notes"),
+        "notes": notes,
         "isCalibrated": normalized_revenue_per_share != current_revenue_per_share if normalized_revenue_per_share is not None and current_revenue_per_share is not None else False,
     }
 
