@@ -725,6 +725,48 @@ def _compute_mfi(highs, lows, closes, volumes, period=14):
     return round(100 - (100 / (1 + mfr)), 2)
 
 
+def _resolve_list_price(symbol: str, quote_payload: dict):
+    is_tw_symbol = _is_tw_market_symbol(symbol)
+    if is_tw_symbol:
+        return quote_payload.get("displayPrice") or quote_payload.get("regularPrice") or quote_payload.get("price")
+    return quote_payload.get("regularPrice") or quote_payload.get("displayPrice") or quote_payload.get("price")
+
+
+def _fetch_watchlist_item(symbol: str):
+    for resolved_symbol in candidate_symbols(symbol):
+        try:
+            quote_payload = get_quote(resolved_symbol)
+            if isinstance(quote_payload, dict) and quote_payload.get("error"):
+                continue
+
+            stock_payload = get_stock_data(resolved_symbol, period="1d")
+            sparkline = stock_payload.get("data", []) if isinstance(stock_payload, dict) else []
+            sparkline_prices = [item.get("price") for item in sparkline if item.get("price") is not None]
+
+            company_name = quote_payload.get("companyName") or resolved_symbol.upper()
+            list_price = _resolve_list_price(resolved_symbol, quote_payload)
+
+            return {
+                "symbol": resolved_symbol.upper(),
+                "name": company_name,
+                "price": round(list_price, 2) if list_price is not None else None,
+                "previousClose": quote_payload.get("previousClose"),
+                "change": quote_payload.get("change"),
+                "sparkline": sparkline_prices,
+            }
+        except Exception:
+            continue
+
+    return {
+        "symbol": normalize_symbol(symbol),
+        "name": normalize_symbol(symbol),
+        "price": None,
+        "previousClose": None,
+        "change": None,
+        "sparkline": [],
+    }
+
+
 def _signal_from_indicators(rsi, mfi):
     if rsi is None and mfi is None:
         return "-"
@@ -843,6 +885,20 @@ def search_symbols(q: str = Query(..., min_length=1), limit: int = Query(8, ge=1
         return {"query": q, "results": results[:limit]}
     except Exception as e:
         return {"error": f"搜尋失敗: {str(e)}", "results": []}
+
+
+@app.get("/watchlist")
+def get_watchlist(symbols: str = Query(..., min_length=1)):
+    requested = [normalize_symbol(item) for item in symbols.split(",") if item.strip()]
+    deduped = []
+    for item in requested:
+        if item not in deduped:
+            deduped.append(item)
+
+    return {
+        "symbols": deduped,
+        "items": [_fetch_watchlist_item(symbol) for symbol in deduped],
+    }
 
 
 @app.get("/news/{symbol}")
