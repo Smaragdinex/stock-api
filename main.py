@@ -1188,7 +1188,7 @@ def get_ratings(symbol: str):
 
 
 @app.get("/earnings/{symbol}")
-def get_earnings(symbol: str, limit: int = Query(5, ge=1, le=8)):
+def get_earnings(symbol: str, limit: int = Query(6, ge=1, le=8)):
     cache_key = (normalize_symbol(symbol), int(limit))
     cached = _cache_get("earnings", cache_key, 300)
     if cached is not None:
