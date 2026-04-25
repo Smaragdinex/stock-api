@@ -1000,8 +1000,9 @@ def get_watchlist(symbols: str = Query(..., min_length=1)):
 
 
 @app.get("/llm-tomorrow/{symbol}")
-def get_llm_tomorrow(symbol: str):
-    cache_key = normalize_symbol(symbol)
+def get_llm_tomorrow(symbol: str, lang: str = Query("en")):
+    normalized_lang = "zh" if str(lang).lower().startswith("zh") else "en"
+    cache_key = (normalize_symbol(symbol), normalized_lang)
     cached = _cache_get("llm_tomorrow", cache_key, 300)
     if cached is not None:
         return cached
@@ -1021,6 +1022,8 @@ def get_llm_tomorrow(symbol: str):
 
     latest_news_titles = [item.get("title") for item in news_payload.get("items", [])[:3] if item.get("title")]
 
+    language_instruction = "Respond in Traditional Chinese." if normalized_lang == "zh" else "Respond in English."
+
     prompt = f"""
 You are a conservative stock-analysis assistant.
 Return only valid JSON with keys: bias, predictedLow, predictedHigh, confidence, summary.
@@ -1028,6 +1031,7 @@ Use bias from: up, down, flat.
 Use confidence from: low, medium, high.
 Summary must be one short sentence under 220 characters.
 Do not include markdown.
+{language_instruction}
 
 Stock: {normalize_symbol(symbol)}
 Current price: {current_price}
@@ -1070,6 +1074,7 @@ Be conservative and realistic.
             "stock": normalize_symbol(symbol),
             **cleaned,
             "source": "ollama:qwen2.5:14b",
+            "lang": normalized_lang,
         }
         return _cache_set("llm_tomorrow", cache_key, payload)
     except Exception as e:
@@ -1079,8 +1084,9 @@ Be conservative and realistic.
             "predictedLow": round(current_price * 0.98, 2) if current_price is not None else None,
             "predictedHigh": round(current_price * 1.02, 2) if current_price is not None else None,
             "confidence": "low",
-            "summary": "Local LLM response unavailable; showing fallback range.",
+            "summary": "本地 LLM 暫時無回應，先顯示保守區間。" if normalized_lang == "zh" else "Local LLM response unavailable; showing fallback range.",
             "source": "fallback",
+            "lang": normalized_lang,
             "error": str(e),
         }
         return _cache_set("llm_tomorrow", cache_key, fallback)
