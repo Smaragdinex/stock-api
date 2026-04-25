@@ -1066,6 +1066,11 @@ Important rules:
 - Use down only when the negative evidence is clear and dominant.
 - Do not assign high confidence to down unless the projected range is clearly below current price.
 - Use high confidence only when the evidence is strong and aligned.
+- For newsImpact, do not rely only on explicit earnings headlines.
+- If financial impact is not explicit, infer sentiment from industry and macro signals such as AI demand, cloud spending, semiconductor cycle, competition intensity, pricing pressure, regulation, tariffs, geopolitics, and supply-chain trends.
+- Use positive when recent headlines imply improving demand, stronger adoption, favorable positioning, or easing risk.
+- Use negative when recent headlines imply weakening demand, tougher competition, export limits, geopolitical pressure, regulatory risk, or supply-chain stress.
+- Use neutral only when the combined news signal is genuinely mixed or weak after considering those broader factors.
 
 Stock: {normalize_symbol(symbol)}
 Current price: {current_price}
@@ -1085,6 +1090,7 @@ Recent earnings items: {earnings_payload.get('items')}
 Top news headlines: {latest_news_titles}
 
 Estimate only the next trading day's likely price range and directional bias using the provided data.
+In newsSummary, explicitly mention the likely driver behind the news sentiment when possible (for example AI demand, competition, geopolitics, regulation, tariffs, or supply chain).
 Be balanced, realistic, and avoid one-sided pessimism.
 """.strip()
 
