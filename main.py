@@ -825,6 +825,14 @@ def _ollama_generate(prompt: str, schema: dict | None = None, model: str = "qwen
     return data.get("response", "")
 
 
+def _contains_enough_cjk(text: str) -> bool:
+    if not text:
+        return False
+    cjk_count = sum(1 for ch in text if "\u4e00" <= ch <= "\u9fff")
+    alpha_count = sum(1 for ch in text if ch.isalpha())
+    return cjk_count >= 6 and cjk_count >= alpha_count / 2
+
+
 def _sanitize_llm_tomorrow_output(raw: dict, fallback_price: float | None = None):
     bias = str(raw.get("bias") or "neutral").strip().lower()
     if bias not in {"up", "down", "flat", "neutral", "bullish", "bearish", "positive", "negative"}:
@@ -857,7 +865,16 @@ def _sanitize_llm_tomorrow_output(raw: dict, fallback_price: float | None = None
         else:
             confidence = "medium"
 
+    news_impact = str(raw.get("newsImpact") or "neutral").strip().lower()
+    if news_impact not in {"positive", "negative", "neutral", "bullish", "bearish"}:
+        news_impact = "neutral"
+    if news_impact == "bullish":
+        news_impact = "positive"
+    elif news_impact == "bearish":
+        news_impact = "negative"
+
     summary = str(raw.get("summary") or "")[:280].strip()
+    news_summary = str(raw.get("newsSummary") or "")[:280].strip()
 
     return {
         "bias": bias,
@@ -865,6 +882,8 @@ def _sanitize_llm_tomorrow_output(raw: dict, fallback_price: float | None = None
         "predictedHigh": round(predicted_high, 2) if predicted_high is not None else None,
         "confidence": confidence,
         "summary": summary,
+        "newsImpact": news_impact,
+        "newsSummary": news_summary,
     }
 
 
@@ -1062,14 +1081,23 @@ Be conservative and realistic.
             "predictedHigh": {"type": "number"},
             "confidence": {"type": "string"},
             "summary": {"type": "string"},
+            "newsImpact": {"type": "string"},
+            "newsSummary": {"type": "string"},
         },
-        "required": ["bias", "predictedLow", "predictedHigh", "confidence", "summary"],
+        "required": ["bias", "predictedLow", "predictedHigh", "confidence", "summary", "newsImpact", "newsSummary"],
     }
 
     try:
         raw_response = _ollama_generate(prompt, schema=schema)
         parsed = json.loads(raw_response)
         cleaned = _sanitize_llm_tomorrow_output(parsed, fallback_price=current_price)
+
+        if normalized_lang == "zh" and (not _contains_enough_cjk(cleaned.get("summary", "")) or not _contains_enough_cjk(cleaned.get("newsSummary", ""))):
+            retry_prompt = prompt + "\nIMPORTANT: summary and newsSummary must be Traditional Chinese only. Do not mix English words unless they are stock tickers."
+            raw_response = _ollama_generate(retry_prompt, schema=schema)
+            parsed = json.loads(raw_response)
+            cleaned = _sanitize_llm_tomorrow_output(parsed, fallback_price=current_price)
+
         payload = {
             "stock": normalize_symbol(symbol),
             **cleaned,
@@ -1084,7 +1112,9 @@ Be conservative and realistic.
             "predictedLow": round(current_price * 0.98, 2) if current_price is not None else None,
             "predictedHigh": round(current_price * 1.02, 2) if current_price is not None else None,
             "confidence": "low",
-            "summary": "本地 LLM 暫時無回應，先顯示保守區間。" if normalized_lang == "zh" else "Local LLM response unavailable; showing fallback range.",
+            "summary": "技術面訊號偏中性，先顯示保守區間。" if normalized_lang == "zh" else "Technical signals look neutral; showing a conservative range.",
+            "newsImpact": "neutral",
+            "newsSummary": "最新新聞整體偏中性，暫未看到明確利多或利空。" if normalized_lang == "zh" else "Recent headlines look neutral without a clear bullish or bearish catalyst.",
             "source": "fallback",
             "lang": normalized_lang,
             "error": str(e),
