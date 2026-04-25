@@ -322,47 +322,15 @@ def _valuation_overrides(symbol: str):
     return overrides.get((symbol or '').upper(), {})
 
 
-def _valuation_price_source_symbol(symbol: str):
-    upper = (symbol or "").upper()
-    if upper == "TSM":
-        return "2330.TW"
-    return None
-
-
-def _fetch_quote_inputs(symbol: str):
-    if not symbol:
-        return None, {}
-
-    try:
-        ticker = yf.Ticker(symbol)
-        return _safe_info(ticker), _safe_fast_info(ticker)
-    except Exception:
-        return None, {}
-
-
-def _resolved_current_price(info, fast_info):
-    return _safe_float(
-        (info or {}).get("currentPrice")
-        or (info or {}).get("regularMarketPrice")
-        or (fast_info or {}).get("lastPrice")
-        or (fast_info or {}).get("regularMarketPrice")
-    )
-
-
 def _build_us_valuation_inputs(symbol, info, fast_info):
     overrides = _valuation_overrides(symbol)
 
-    current_price = _resolved_current_price(info, fast_info)
-    notes = overrides.get("notes")
-
-    price_source_symbol = _valuation_price_source_symbol(symbol)
-    if price_source_symbol:
-        price_source_info, price_source_fast_info = _fetch_quote_inputs(price_source_symbol)
-        tw_current_price = _resolved_current_price(price_source_info, price_source_fast_info)
-        if tw_current_price is not None:
-            current_price = tw_current_price
-            notes = ((notes + " ") if notes else "") + f"Price source uses {price_source_symbol} for ADR-linked valuation."
-
+    current_price = _safe_float(
+        info.get("currentPrice")
+        or info.get("regularMarketPrice")
+        or fast_info.get("lastPrice")
+        or fast_info.get("regularMarketPrice")
+    )
     analyst_target_low = _safe_float(info.get("targetLowPrice"))
     analyst_target_mean = _safe_float(info.get("targetMeanPrice") or info.get("targetMedianPrice"))
     analyst_target_high = _safe_float(info.get("targetHighPrice"))
@@ -388,7 +356,7 @@ def _build_us_valuation_inputs(symbol, info, fast_info):
         "analystTargetMean": analyst_target_mean,
         "analystTargetHigh": analyst_target_high,
         "analystCount": analyst_count,
-        "notes": notes,
+        "notes": overrides.get("notes"),
         "isCalibrated": normalized_revenue_per_share != current_revenue_per_share if normalized_revenue_per_share is not None and current_revenue_per_share is not None else False,
     }
 
