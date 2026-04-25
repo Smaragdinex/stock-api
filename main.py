@@ -15,6 +15,7 @@ TW_STOCKS_PATH = BASE_DIR / "tw_stocks.json"
 
 _TW_STOCKS_CACHE = None
 _TW_STOCKS_INDEX = None
+_WATCHLIST_CACHE = {}
 
 
 @app.get("/")
@@ -767,6 +768,26 @@ def _fetch_watchlist_item(symbol: str):
     }
 
 
+def _cached_watchlist_response(symbols: list[str]):
+    now = datetime.now().timestamp()
+    ttl_seconds = 20
+    normalized_key = tuple(symbols)
+    cached = _WATCHLIST_CACHE.get(normalized_key)
+
+    if cached and (now - cached["ts"]) < ttl_seconds:
+        return cached["payload"]
+
+    payload = {
+        "symbols": symbols,
+        "items": [_fetch_watchlist_item(symbol) for symbol in symbols],
+    }
+    _WATCHLIST_CACHE[normalized_key] = {
+        "ts": now,
+        "payload": payload,
+    }
+    return payload
+
+
 def _signal_from_indicators(rsi, mfi):
     if rsi is None and mfi is None:
         return "-"
@@ -895,10 +916,7 @@ def get_watchlist(symbols: str = Query(..., min_length=1)):
         if item not in deduped:
             deduped.append(item)
 
-    return {
-        "symbols": deduped,
-        "items": [_fetch_watchlist_item(symbol) for symbol in deduped],
-    }
+    return _cached_watchlist_response(deduped)
 
 
 @app.get("/news/{symbol}")
