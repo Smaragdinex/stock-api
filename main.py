@@ -16,6 +16,7 @@ TW_STOCKS_PATH = BASE_DIR / "tw_stocks.json"
 _TW_STOCKS_CACHE = None
 _TW_STOCKS_INDEX = None
 _WATCHLIST_CACHE = {}
+_ENDPOINT_CACHE = {}
 
 
 @app.get("/")
@@ -788,6 +789,22 @@ def _cached_watchlist_response(symbols: list[str]):
     return payload
 
 
+def _cache_get(bucket: str, key, ttl_seconds: int):
+    now = datetime.now().timestamp()
+    cached = _ENDPOINT_CACHE.get((bucket, key))
+    if cached and (now - cached["ts"]) < ttl_seconds:
+        return cached["payload"]
+    return None
+
+
+def _cache_set(bucket: str, key, payload):
+    _ENDPOINT_CACHE[(bucket, key)] = {
+        "ts": datetime.now().timestamp(),
+        "payload": payload,
+    }
+    return payload
+
+
 def _signal_from_indicators(rsi, mfi):
     if rsi is None and mfi is None:
         return "-"
@@ -921,6 +938,11 @@ def get_watchlist(symbols: str = Query(..., min_length=1)):
 
 @app.get("/news/{symbol}")
 def get_news(symbol: str, limit: int = Query(10, ge=1, le=30)):
+    cache_key = (normalize_symbol(symbol), int(limit))
+    cached = _cache_get("news", cache_key, 300)
+    if cached is not None:
+        return cached
+
     last_error = None
 
     for resolved_symbol in candidate_symbols(symbol):
@@ -936,19 +958,24 @@ def get_news(symbol: str, limit: int = Query(10, ge=1, le=30)):
 
             normalized.sort(key=lambda x: x.get("publishedAt") or "", reverse=True)
 
-            return {
+            return _cache_set("news", cache_key, {
                 "stock": resolved_symbol.upper(),
                 "items": normalized[:limit],
-            }
+            })
         except Exception as e:
             last_error = str(e)
             continue
 
-    return {"stock": normalize_symbol(symbol), "items": [], "error": last_error}
+    return _cache_set("news", cache_key, {"stock": normalize_symbol(symbol), "items": [], "error": last_error})
 
 
 @app.get("/ratings/{symbol}")
 def get_ratings(symbol: str):
+    cache_key = normalize_symbol(symbol)
+    cached = _cache_get("ratings", cache_key, 300)
+    if cached is not None:
+        return cached
+
     last_error = None
 
     for resolved_symbol in candidate_symbols(symbol):
@@ -977,7 +1004,7 @@ def get_ratings(symbol: str):
             strong_sell = int(latest.get("strongSell") or 0)
             total = strong_buy + buy + hold + sell + strong_sell
 
-            return {
+            return _cache_set("ratings", cache_key, {
                 "stock": resolved_symbol.upper(),
                 "strongBuy": strong_buy,
                 "buy": buy,
@@ -987,12 +1014,12 @@ def get_ratings(symbol: str):
                 "total": total,
                 "recommendationKey": info.get("recommendationKey"),
                 "numberOfAnalystOpinions": info.get("numberOfAnalystOpinions"),
-            }
+            })
         except Exception as e:
             last_error = str(e)
             continue
 
-    return {
+    return _cache_set("ratings", cache_key, {
         "stock": normalize_symbol(symbol),
         "strongBuy": 0,
         "buy": 0,
@@ -1001,11 +1028,16 @@ def get_ratings(symbol: str):
         "strongSell": 0,
         "total": 0,
         "error": last_error,
-    }
+    })
 
 
 @app.get("/earnings/{symbol}")
 def get_earnings(symbol: str, limit: int = Query(5, ge=1, le=8)):
+    cache_key = (normalize_symbol(symbol), int(limit))
+    cached = _cache_get("earnings", cache_key, 300)
+    if cached is not None:
+        return cached
+
     last_error = None
 
     for resolved_symbol in candidate_symbols(symbol):
@@ -1068,21 +1100,26 @@ def get_earnings(symbol: str, limit: int = Query(5, ge=1, le=8)):
                     except Exception:
                         next_earnings_date = str(cal_date)
 
-            return {
+            return _cache_set("earnings", cache_key, {
                 "stock": resolved_symbol.upper(),
                 "items": items,
                 "nextEarningsDate": next_earnings_date,
                 "earningsTiming": earnings_timing,
-            }
+            })
         except Exception as e:
             last_error = str(e)
             continue
 
-    return {"stock": normalize_symbol(symbol), "items": [], "error": last_error}
+    return _cache_set("earnings", cache_key, {"stock": normalize_symbol(symbol), "items": [], "error": last_error})
 
 
 @app.get("/valuation/{symbol}")
 def get_valuation(symbol: str):
+    cache_key = normalize_symbol(symbol)
+    cached = _cache_get("valuation", cache_key, 300)
+    if cached is not None:
+        return cached
+
     last_error = None
 
     for resolved_symbol in candidate_symbols(symbol):
@@ -1096,12 +1133,12 @@ def get_valuation(symbol: str):
                 payload["error"] = "Valuation inputs unavailable"
             elif payload.get("modelType") == "eps_pe" and payload.get("baseEPS") is None:
                 payload["error"] = "Valuation inputs unavailable"
-            return payload
+            return _cache_set("valuation", cache_key, payload)
         except Exception as e:
             last_error = str(e)
             continue
 
-    return {
+    return _cache_set("valuation", cache_key, {
         "stock": normalize_symbol(symbol),
         "holdingYears": 3,
         "currentPrice": None,
@@ -1111,11 +1148,16 @@ def get_valuation(symbol: str):
         "notes": None,
         "scenarios": [],
         "error": last_error or "Valuation inputs unavailable",
-    }
+    })
 
 
 @app.get("/quote/{symbol}")
 def get_quote(symbol: str):
+    cache_key = normalize_symbol(symbol)
+    cached = _cache_get("quote", cache_key, 15)
+    if cached is not None:
+        return cached
+
     last_error = None
 
     for resolved_symbol in candidate_symbols(symbol):
@@ -1147,7 +1189,7 @@ def get_quote(symbol: str):
                 change = round(last_price - previous_close, 2) if previous_close is not None else None
                 change_percent = round((change / previous_close) * 100, 2) if previous_close not in (None, 0) and change is not None else None
 
-                return {
+                return _cache_set("quote", cache_key, {
                     "stock": resolved_symbol.upper(),
                     "price": round(last_price, 2),
                     "displayPrice": round(last_price, 2),
@@ -1162,7 +1204,7 @@ def get_quote(symbol: str):
                     "marketState": market_state,
                     "session": session,
                     **snapshot,
-                }
+                })
 
             close_prices = intraday["Close"].dropna()
             if close_prices.empty:
@@ -1220,7 +1262,7 @@ def get_quote(symbol: str):
             change = round(display_price - previous_close, 2) if previous_close is not None and display_price is not None else None
             change_percent = round((change / previous_close) * 100, 2) if previous_close not in (None, 0) and change is not None else None
 
-            return {
+            return _cache_set("quote", cache_key, {
                 "stock": resolved_symbol.upper(),
                 "price": round(display_price, 2) if display_price is not None else None,
                 "displayPrice": round(display_price, 2) if display_price is not None else None,
@@ -1235,16 +1277,21 @@ def get_quote(symbol: str):
                 "marketState": market_state,
                 "session": session,
                 **snapshot,
-            }
+            })
         except Exception as e:
             last_error = str(e)
             continue
 
-    return {"error": last_error or f"找不到股票代號: {symbol}"}
+    return _cache_set("quote", cache_key, {"error": last_error or f"找不到股票代號: {symbol}"})
 
 
 @app.get("/stock/{symbol}")
 def get_stock_data(symbol: str, period: str = "6mo"):
+    cache_key = (normalize_symbol(symbol), period)
+    cached = _cache_get("stock", cache_key, 20)
+    if cached is not None:
+        return cached
+
     allowed_periods = ["1d", "5d", "1mo", "ytd", "3mo", "6mo", "1y", "5y"]
     if period not in allowed_periods:
         return {"error": f"不支援的 period: {period}"}
@@ -1331,13 +1378,13 @@ def get_stock_data(symbol: str, period: str = "6mo"):
             lows = [float(x) for x in low_prices.tolist()]
             volumes = [float(x) if pd.notnull(x) else 0.0 for x in volume_series.tolist()]
 
-            return _attach_indicators(payload, highs, lows, closes, volumes)
+            return _cache_set("stock", cache_key, _attach_indicators(payload, highs, lows, closes, volumes))
 
         except Exception as e:
             last_error = str(e)
             continue
 
-    return {"error": last_error or f"找不到股票代號: {symbol}"}
+    return _cache_set("stock", cache_key, {"error": last_error or f"找不到股票代號: {symbol}"})
 
 
 if __name__ == "__main__":
