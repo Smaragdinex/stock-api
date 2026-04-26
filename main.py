@@ -119,6 +119,7 @@ def _sanitize_analysis_output(symbol: str, data: dict) -> dict:
 
 
 def _fallback_ai_analysis(payload: AIAnalyzeInput):
+    is_english = str(payload.language or "").lower().startswith("en")
     bias = (payload.bias or "").lower()
     news = (payload.newsImpact or "").lower()
     confidence = (payload.confidence or "medium").capitalize()
@@ -131,17 +132,17 @@ def _fallback_ai_analysis(payload: AIAnalyzeInput):
     technical = []
     if payload.indicators.rsi is not None:
         if payload.indicators.rsi >= 70:
-            technical.append("RSI 偏高，短線有過熱壓力")
+            technical.append("RSI remains elevated, suggesting short-term overheating pressure" if is_english else "RSI 偏高，短線有過熱壓力")
         elif payload.indicators.rsi <= 30:
-            technical.append("RSI 偏低，留意超跌反彈可能")
+            technical.append("RSI is low, so an oversold rebound is worth monitoring" if is_english else "RSI 偏低，留意超跌反彈可能")
     if payload.indicators.mfi is not None:
         if payload.indicators.mfi < 50:
-            technical.append("MFI 偏弱，資金動能仍不足")
+            technical.append("MFI is soft and money flow remains weak" if is_english else "MFI 偏弱，資金動能仍不足")
         else:
-            technical.append("MFI 持穩，資金面尚未明顯轉差")
+            technical.append("MFI is stable and money flow has not clearly deteriorated" if is_english else "MFI 持穩，資金面尚未明顯轉差")
     if payload.technicalSummary:
         technical.append(str(payload.technicalSummary).strip())
-    technical = technical[:3] or ["目前技術面訊號有限，宜保守看待"]
+    technical = technical[:3] or (["No additional technical edge is available right now"] if is_english else ["目前技術面訊號有限，宜保守看待"])
 
     sentiment_label = "neutral"
     if any(word in news for word in ["positive", "bull"]):
@@ -153,20 +154,24 @@ def _fallback_ai_analysis(payload: AIAnalyzeInput):
     if payload.newsSummary:
         sentiment_items = [seg.strip() for seg in str(payload.newsSummary).replace("；", "。").split("。") if seg.strip()][:2]
     if not sentiment_items:
-        sentiment_items = ["目前新聞面沒有明顯額外優勢"]
+        sentiment_items = ["No clear additional edge from current news"] if is_english else ["目前新聞面沒有明顯額外優勢"]
 
     return _sanitize_analysis_output(payload.symbol, {
         "action": action,
         "confidence": confidence if confidence in ["High", "Medium", "Low"] else "Medium",
         "predictedLow": payload.predictedLow,
         "predictedHigh": payload.predictedHigh,
-        "summary": payload.technicalSummary or "短線訊號偏混合，建議先等待更明確方向。",
+        "summary": payload.technicalSummary or ("Signals are mixed, so waiting for a clearer direction is preferable." if is_english else "短線訊號偏混合，建議先等待更明確方向。"),
         "technical": technical,
         "sentiment": {
             "label": sentiment_label,
             "items": sentiment_items,
         },
         "watchPoints": [
+            "Whether price reclaims short-term moving averages",
+            "Whether volume expands and holds",
+            "Whether price breaks above the projected range"
+        ] if is_english else [
             "是否站回短期均線",
             "量能是否放大並延續",
             "是否突破預測區間上緣",
