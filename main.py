@@ -5,10 +5,17 @@ import json
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, Query, HTTPException
+from pydantic import BaseModel
+import os
 import pandas as pd
 import yfinance as yf
 from yahooquery import search as yahoo_search
+
+try:
+    from openai import OpenAI
+except ImportError:
+    OpenAI = None
 
 app = FastAPI()
 BASE_DIR = Path(__file__).resolve().parent
@@ -23,6 +30,171 @@ _ENDPOINT_CACHE = {}
 @app.get("/")
 def root():
     return {"message": "API is running"}
+
+
+@app.get("/health")
+def health():
+    return {"ok": True}
+
+
+class AIAnalyzeIndicators(BaseModel):
+    rsi: float | None = None
+    mfi: float | None = None
+    signal: str | None = None
+
+
+class AIAnalyzeInput(BaseModel):
+    symbol: str
+    companyName: str
+    language: str = "zh-TW"
+    currentPrice: float | None = None
+    predictedLow: float | None = None
+    predictedHigh: float | None = None
+    bias: str | None = None
+    confidence: str | None = None
+    technicalSummary: str | None = None
+    newsImpact: str | None = None
+    newsSummary: str | None = None
+    indicators: AIAnalyzeIndicators = AIAnalyzeIndicators()
+    marketContext: str | None = None
+
+
+SYSTEM_PROMPT = """
+You are a disciplined short-term stock analysis assistant.
+Analyze exactly one stock only. Do not mention unrelated companies. Be conservative. Return valid JSON only.
+
+Special hard rule for MRVL:
+- If symbol = MRVL, company name may only be "Marvell Technology" or "Marvell".
+- Never use these words: "美信", "美信科技", "美信集成電路", "Maxim", "MXIM".
+- If those words appear in your draft, remove them or replace them with "Marvell Technology" before returning JSON.
+""".strip()
+
+
+def _sanitize_text_for_symbol(symbol: str, text: str) -> str:
+    cleaned = (text or "").strip()
+    if not cleaned:
+        return ""
+
+    if symbol.upper() == "MRVL":
+        forbidden = ["美信科技", "美信集成電路", "美信", "maxim", "mxim"]
+        lower = cleaned.lower()
+        if any(term in cleaned for term in ["美信科技", "美信集成電路", "美信"]) or any(term in lower for term in ["maxim", "mxim"]):
+            return ""
+    return cleaned
+
+
+def _sanitize_analysis_output(symbol: str, data: dict) -> dict:
+    symbol = symbol.upper()
+    summary = _sanitize_text_for_symbol(symbol, data.get("summary", ""))
+    if not summary:
+        summary = "短線訊號偏混合，建議先等待更明確方向。"
+
+    technical = [
+        item for item in (_sanitize_text_for_symbol(symbol, x) for x in data.get("technical", [])) if item
+    ]
+    if not technical:
+        technical = ["目前技術面訊號有限，宜保守看待"]
+
+    sentiment = data.get("sentiment", {}) or {}
+    sentiment_items = [
+        item for item in (_sanitize_text_for_symbol(symbol, x) for x in sentiment.get("items", [])) if item
+    ]
+    if not sentiment_items:
+        sentiment_items = ["目前新聞面沒有明顯額外優勢"]
+
+    watch_points = [
+        item for item in (_sanitize_text_for_symbol(symbol, x) for x in data.get("watchPoints", [])) if item
+    ]
+    if not watch_points:
+        watch_points = ["是否站回短期均線", "量能是否放大並延續", "是否突破預測區間上緣"]
+
+    data["summary"] = summary
+    data["technical"] = technical[:3]
+    data["sentiment"] = {
+        "label": sentiment.get("label", "neutral"),
+        "items": sentiment_items[:2],
+    }
+    data["watchPoints"] = watch_points[:3]
+    return data
+
+
+def _fallback_ai_analysis(payload: AIAnalyzeInput):
+    bias = (payload.bias or "").lower()
+    news = (payload.newsImpact or "").lower()
+    confidence = (payload.confidence or "medium").capitalize()
+    action = "Wait"
+    if any(word in bias for word in ["down", "bear", "negative"]) or any(word in news for word in ["down", "bear", "negative"]):
+        action = "Avoid" if confidence == "High" else "Wait"
+    elif any(word in bias for word in ["up", "bull", "positive"]) or any(word in news for word in ["up", "bull", "positive"]):
+        action = "Buy" if confidence == "High" else "Wait"
+
+    technical = []
+    if payload.indicators.rsi is not None:
+        if payload.indicators.rsi >= 70:
+            technical.append("RSI 偏高，短線有過熱壓力")
+        elif payload.indicators.rsi <= 30:
+            technical.append("RSI 偏低，留意超跌反彈可能")
+    if payload.indicators.mfi is not None:
+        if payload.indicators.mfi < 50:
+            technical.append("MFI 偏弱，資金動能仍不足")
+        else:
+            technical.append("MFI 持穩，資金面尚未明顯轉差")
+    if payload.technicalSummary:
+        technical.append(str(payload.technicalSummary).strip())
+    technical = technical[:3] or ["目前技術面訊號有限，宜保守看待"]
+
+    sentiment_label = "neutral"
+    if any(word in news for word in ["positive", "bull"]):
+        sentiment_label = "bullish"
+    elif any(word in news for word in ["negative", "bear"]):
+        sentiment_label = "bearish"
+
+    sentiment_items = []
+    if payload.newsSummary:
+        sentiment_items = [seg.strip() for seg in str(payload.newsSummary).replace("；", "。").split("。") if seg.strip()][:2]
+    if not sentiment_items:
+        sentiment_items = ["目前新聞面沒有明顯額外優勢"]
+
+    return _sanitize_analysis_output(payload.symbol, {
+        "action": action,
+        "confidence": confidence if confidence in ["High", "Medium", "Low"] else "Medium",
+        "predictedLow": payload.predictedLow,
+        "predictedHigh": payload.predictedHigh,
+        "summary": payload.technicalSummary or "短線訊號偏混合，建議先等待更明確方向。",
+        "technical": technical,
+        "sentiment": {
+            "label": sentiment_label,
+            "items": sentiment_items,
+        },
+        "watchPoints": [
+            "是否站回短期均線",
+            "量能是否放大並延續",
+            "是否突破預測區間上緣",
+        ],
+    })
+
+
+@app.post("/api/ai/analyze")
+def ai_analyze(payload: AIAnalyzeInput):
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key or OpenAI is None:
+        return _fallback_ai_analysis(payload)
+
+    try:
+        client = OpenAI(api_key=api_key)
+        user_prompt = json.dumps(payload.model_dump(), ensure_ascii=False)
+        response = client.responses.create(
+            model=os.getenv("OPENAI_MODEL", "gpt-4.1"),
+            temperature=0.2,
+            input=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt},
+            ],
+        )
+        text = response.output_text
+        return _sanitize_analysis_output(payload.symbol, json.loads(text))
+    except Exception:
+        return _fallback_ai_analysis(payload)
 
 
 def _safe_float(value):
