@@ -1,0 +1,561 @@
+[
+  {
+    "prediction_id": "pred_20260502_221953_074493",
+    "symbol": "SNDK",
+    "companyName": "SanDisk",
+    "predicted_at": "2026-05-02T22:19:53.074516+08:00",
+    "currentPrice": 1095.0,
+    "predictedLow": 1080.0,
+    "predictedHigh": 1120.0,
+    "predictedMid": 1100.0,
+    "actualPrice": 1095.0,
+    "residual": -5.0,
+    "predictedDirection": "up",
+    "actualDirection": "up",
+    "isCorrect": true,
+    "action": "Buy",
+    "confidence": "High",
+    "summary": "RSI 偏強，趨勢仍在多方。",
+    "technical": [
+      "MFI 持穩，資金面尚未明顯轉差",
+      "RSI 偏強，趨勢仍在多方。"
+    ],
+    "sentiment": {
+      "label": "bullish",
+      "items": [
+        "資料中心與 AI 需求帶動，基本面偏正面"
+      ]
+    },
+    "watchPoints": [
+      "是否站回短期均線",
+      "量能是否放大並延續",
+      "是否突破預測區間上緣"
+    ],
+    "bias": null,
+    "newsImpact": null,
+    "newsSummary": null,
+    "indicators": {
+      "rsi": 68.0,
+      "mfi": 62.0,
+      "signal": "強勢"
+    },
+    "marketContext": "short-term test",
+    "source": "railway-api"
+  },
+  {
+    "prediction_id": "pred_20260502_233035_394631",
+    "symbol": "TSM",
+    "companyName": "TSM",
+    "predicted_at": "2026-05-02T23:30:35.552941",
+    "currentPrice": 397.72,
+    "predictedLow": 385.79,
+    "predictedHigh": 409.65,
+    "predictedMid": 397.72,
+    "actualPrice": 397.72,
+    "residual": 0.0,
+    "predictedDirection": "up",
+    "actualDirection": "up",
+    "isCorrect": true,
+    "action": "Buy",
+    "confidence": "High",
+    "summary": "先進製程需求穩，趨勢偏多。 現價變動 3.47。",
+    "technical": [
+      "MFI 持穩，資金面尚未明顯轉差",
+      "先進製程需求穩，趨勢偏多。 現價變動 3.47。"
+    ],
+    "sentiment": {
+      "label": "bullish",
+      "items": [
+        "AI 晶片需求與先進製程持續支撐"
+      ]
+    },
+    "watchPoints": [
+      "是否站回短期均線",
+      "量能是否放大並延續",
+      "是否突破預測區間上緣"
+    ],
+    "bias": null,
+    "newsImpact": null,
+    "newsSummary": null,
+    "indicators": {
+      "rsi": 61,
+      "mfi": 60,
+      "signal": "強勢"
+    },
+    "marketContext": "watchlist",
+    "source": "railway-api"
+  },
+  {
+    "prediction_id": "pred_20260502_233037_242963",
+    "symbol": "NVDA",
+    "companyName": "NVDA",
+    "predicted_at": "2026-05-02T23:30:37.391478",
+    "currentPrice": 198.35,
+    "predictedLow": 192.4,
+    "predictedHigh": 204.3,
+    "predictedMid": 198.35,
+    "actualPrice": 198.35,
+    "residual": -0.0,
+    "predictedDirection": "up",
+    "actualDirection": "up",
+    "isCorrect": true,
+    "action": "Buy",
+    "confidence": "High",
+    "summary": "AI 伺服器需求延續，強勢趨勢未破。 現價變動 -1.66。",
+    "technical": [
+      "MFI 持穩，資金面尚未明顯轉差",
+      "AI 伺服器需求延續，強勢趨勢未破。 現價變動 -1.66。"
+    ],
+    "sentiment": {
+      "label": "bullish",
+      "items": [
+        "Blackwell 與資料中心需求持續支撐"
+      ]
+    },
+    "watchPoints": [
+      "是否站回短期均線",
+      "量能是否放大並延續",
+      "是否突破預測區間上緣"
+    ],
+    "bias": null,
+    "newsImpact": null,
+    "newsSummary": null,
+    "indicators": {
+      "rsi": 64,
+      "mfi": 63,
+      "signal": "強勢"
+    },
+    "marketContext": "watchlist",
+    "source": "railway-api"
+  },
+  {
+    "prediction_id": "pred_20260502_233038_975627",
+    "symbol": "MRVL",
+    "companyName": "MRVL",
+    "predicted_at": "2026-05-02T23:30:39.112764",
+    "currentPrice": 164.61,
+    "predictedLow": 159.67,
+    "predictedHigh": 169.55,
+    "predictedMid": 164.61,
+    "actualPrice": 164.61,
+    "residual": 0.0,
+    "predictedDirection": "up",
+    "actualDirection": "up",
+    "isCorrect": true,
+    "action": "Buy",
+    "confidence": "High",
+    "summary": "AI 與資料中心需求仍強，趨勢偏多。 現價變動 1.25。",
+    "technical": [
+      "MFI 持穩，資金面尚未明顯轉差",
+      "AI 與資料中心需求仍強，趨勢偏多。 現價變動 1.25。"
+    ],
+    "sentiment": {
+      "label": "bullish",
+      "items": [
+        "Google AI chips 與 hyperscaler 設計案帶來正面動能"
+      ]
+    },
+    "watchPoints": [
+      "是否站回短期均線",
+      "量能是否放大並延續",
+      "是否突破預測區間上緣"
+    ],
+    "bias": null,
+    "newsImpact": null,
+    "newsSummary": null,
+    "indicators": {
+      "rsi": 66,
+      "mfi": 61,
+      "signal": "強勢"
+    },
+    "marketContext": "watchlist",
+    "source": "railway-api"
+  },
+  {
+    "prediction_id": "pred_20260502_233040_568105",
+    "symbol": "STX",
+    "companyName": "STX",
+    "predicted_at": "2026-05-02T23:30:40.777418",
+    "currentPrice": 726.0,
+    "predictedLow": 704.22,
+    "predictedHigh": 747.78,
+    "predictedMid": 726.0,
+    "actualPrice": 726.0,
+    "residual": 0.0,
+    "predictedDirection": "up",
+    "actualDirection": "up",
+    "isCorrect": true,
+    "action": "Wait",
+    "confidence": "Medium",
+    "summary": "儲存需求穩定，但高位區間震盪。 現價變動 65.7。",
+    "technical": [
+      "MFI 持穩，資金面尚未明顯轉差",
+      "儲存需求穩定，但高位區間震盪。 現價變動 65.7。"
+    ],
+    "sentiment": {
+      "label": "neutral",
+      "items": [
+        "AI 與儲存週期支撐，但追價空間有限"
+      ]
+    },
+    "watchPoints": [
+      "是否站回短期均線",
+      "量能是否放大並延續",
+      "是否突破預測區間上緣"
+    ],
+    "bias": null,
+    "newsImpact": null,
+    "newsSummary": null,
+    "indicators": {
+      "rsi": 58,
+      "mfi": 55,
+      "signal": "中性"
+    },
+    "marketContext": "watchlist",
+    "source": "railway-api"
+  },
+  {
+    "prediction_id": "pred_20260502_234331_023476",
+    "symbol": "TSM",
+    "companyName": "TSM",
+    "predicted_at": "2026-05-02T23:43:31.170891",
+    "currentPrice": 397.72,
+    "predictedLow": 385.79,
+    "predictedHigh": 409.65,
+    "predictedMid": 397.72,
+    "predictedDirection": "up",
+    "action": "Buy",
+    "confidence": "High",
+    "summary": "先進製程需求穩，趨勢偏多。 現價變動 3.47。",
+    "technical": [
+      "MFI 持穩，資金面尚未明顯轉差",
+      "先進製程需求穩，趨勢偏多。 現價變動 3.47。"
+    ],
+    "sentiment": {
+      "label": "bullish",
+      "items": [
+        "AI 晶片需求與先進製程持續支撐"
+      ]
+    },
+    "watchPoints": [
+      "是否站回短期均線",
+      "量能是否放大並延續",
+      "是否突破預測區間上緣"
+    ],
+    "bias": null,
+    "newsImpact": null,
+    "newsSummary": null,
+    "indicators": {
+      "rsi": 61,
+      "mfi": 60,
+      "signal": "強勢"
+    },
+    "marketContext": "watchlist",
+    "source": "railway-api",
+    "targetDate": "Monday",
+    "actualPrice": 397.67,
+    "residual": -0.05,
+    "isCorrect": true
+  },
+  {
+    "prediction_id": "pred_20260502_234332_645360",
+    "symbol": "NVDA",
+    "companyName": "NVDA",
+    "predicted_at": "2026-05-02T23:43:32.883146",
+    "currentPrice": 198.35,
+    "predictedLow": 192.4,
+    "predictedHigh": 204.3,
+    "predictedMid": 198.35,
+    "predictedDirection": "up",
+    "action": "Buy",
+    "confidence": "High",
+    "summary": "AI 伺服器需求延續，強勢趨勢未破。 現價變動 -1.66。",
+    "technical": [
+      "MFI 持穩，資金面尚未明顯轉差",
+      "AI 伺服器需求延續，強勢趨勢未破。 現價變動 -1.66。"
+    ],
+    "sentiment": {
+      "label": "bullish",
+      "items": [
+        "Blackwell 與資料中心需求持續支撐"
+      ]
+    },
+    "watchPoints": [
+      "是否站回短期均線",
+      "量能是否放大並延續",
+      "是否突破預測區間上緣"
+    ],
+    "bias": null,
+    "newsImpact": null,
+    "newsSummary": null,
+    "indicators": {
+      "rsi": 64,
+      "mfi": 63,
+      "signal": "強勢"
+    },
+    "marketContext": "watchlist",
+    "source": "railway-api",
+    "targetDate": "Monday",
+    "actualPrice": 198.45,
+    "residual": 0.1,
+    "isCorrect": true
+  },
+  {
+    "prediction_id": "pred_20260502_234334_310528",
+    "symbol": "MRVL",
+    "companyName": "MRVL",
+    "predicted_at": "2026-05-02T23:43:34.454813",
+    "currentPrice": 164.61,
+    "predictedLow": 159.67,
+    "predictedHigh": 169.55,
+    "predictedMid": 164.61,
+    "predictedDirection": "up",
+    "action": "Buy",
+    "confidence": "High",
+    "summary": "AI 與資料中心需求仍強，趨勢偏多。 現價變動 1.25。",
+    "technical": [
+      "MFI 持穩，資金面尚未明顯轉差",
+      "AI 與資料中心需求仍強，趨勢偏多。 現價變動 1.25。"
+    ],
+    "sentiment": {
+      "label": "bullish",
+      "items": [
+        "Google AI chips 與 hyperscaler 設計案帶來正面動能"
+      ]
+    },
+    "watchPoints": [
+      "是否站回短期均線",
+      "量能是否放大並延續",
+      "是否突破預測區間上緣"
+    ],
+    "bias": null,
+    "newsImpact": null,
+    "newsSummary": null,
+    "indicators": {
+      "rsi": 66,
+      "mfi": 61,
+      "signal": "強勢"
+    },
+    "marketContext": "watchlist",
+    "source": "railway-api",
+    "targetDate": "Monday",
+    "actualPrice": 164.95,
+    "residual": 0.34,
+    "isCorrect": true
+  },
+  {
+    "prediction_id": "pred_20260502_234335_598910",
+    "symbol": "STX",
+    "companyName": "STX",
+    "predicted_at": "2026-05-02T23:43:35.850922",
+    "currentPrice": 726.0,
+    "predictedLow": 704.22,
+    "predictedHigh": 747.78,
+    "predictedMid": 726.0,
+    "predictedDirection": "up",
+    "action": "Wait",
+    "confidence": "Medium",
+    "summary": "儲存需求穩定，但高位區間震盪。 現價變動 65.7。",
+    "technical": [
+      "MFI 持穩，資金面尚未明顯轉差",
+      "儲存需求穩定，但高位區間震盪。 現價變動 65.7。"
+    ],
+    "sentiment": {
+      "label": "neutral",
+      "items": [
+        "AI 與儲存週期支撐，但追價空間有限"
+      ]
+    },
+    "watchPoints": [
+      "是否站回短期均線",
+      "量能是否放大並延續",
+      "是否突破預測區間上緣"
+    ],
+    "bias": null,
+    "newsImpact": null,
+    "newsSummary": null,
+    "indicators": {
+      "rsi": 58,
+      "mfi": 55,
+      "signal": "中性"
+    },
+    "marketContext": "watchlist",
+    "source": "railway-api",
+    "targetDate": "Monday",
+    "actualPrice": 726.93,
+    "residual": 0.93,
+    "isCorrect": true
+  },
+  {
+    "prediction_id": "pred_20260502_234937_684859",
+    "symbol": "TSM",
+    "companyName": "TSM",
+    "predicted_at": "2026-05-02T23:49:37.833235",
+    "currentPrice": 397.72,
+    "predictedLow": 385.79,
+    "predictedHigh": 409.65,
+    "predictedMid": 397.72,
+    "predictedDirection": "up",
+    "action": "Buy",
+    "confidence": "High",
+    "summary": "先進製程需求穩，趨勢偏多。 現價變動 3.47。",
+    "technical": [
+      "MFI 持穩，資金面尚未明顯轉差",
+      "先進製程需求穩，趨勢偏多。 現價變動 3.47。"
+    ],
+    "sentiment": {
+      "label": "bullish",
+      "items": [
+        "AI 晶片需求與先進製程持續支撐"
+      ]
+    },
+    "watchPoints": [
+      "是否站回短期均線",
+      "量能是否放大並延續",
+      "是否突破預測區間上緣"
+    ],
+    "bias": null,
+    "newsImpact": null,
+    "newsSummary": null,
+    "indicators": {
+      "rsi": 61,
+      "mfi": 60,
+      "signal": "強勢"
+    },
+    "marketContext": "watchlist",
+    "source": "railway-api",
+    "targetDate": "Monday",
+    "actualPrice": 397.67,
+    "residual": -0.05,
+    "isCorrect": true
+  },
+  {
+    "prediction_id": "pred_20260502_234939_487151",
+    "symbol": "NVDA",
+    "companyName": "NVDA",
+    "predicted_at": "2026-05-02T23:49:39.628618",
+    "currentPrice": 198.35,
+    "predictedLow": 192.4,
+    "predictedHigh": 204.3,
+    "predictedMid": 198.35,
+    "predictedDirection": "up",
+    "action": "Buy",
+    "confidence": "High",
+    "summary": "AI 伺服器需求延續，強勢趨勢未破。 現價變動 -1.66。",
+    "technical": [
+      "MFI 持穩，資金面尚未明顯轉差",
+      "AI 伺服器需求延續，強勢趨勢未破。 現價變動 -1.66。"
+    ],
+    "sentiment": {
+      "label": "bullish",
+      "items": [
+        "Blackwell 與資料中心需求持續支撐"
+      ]
+    },
+    "watchPoints": [
+      "是否站回短期均線",
+      "量能是否放大並延續",
+      "是否突破預測區間上緣"
+    ],
+    "bias": null,
+    "newsImpact": null,
+    "newsSummary": null,
+    "indicators": {
+      "rsi": 64,
+      "mfi": 63,
+      "signal": "強勢"
+    },
+    "marketContext": "watchlist",
+    "source": "railway-api",
+    "targetDate": "Monday",
+    "actualPrice": 198.45,
+    "residual": 0.1,
+    "isCorrect": true
+  },
+  {
+    "prediction_id": "pred_20260502_234940_884434",
+    "symbol": "MRVL",
+    "companyName": "MRVL",
+    "predicted_at": "2026-05-02T23:49:41.070614",
+    "currentPrice": 164.61,
+    "predictedLow": 159.67,
+    "predictedHigh": 169.55,
+    "predictedMid": 164.61,
+    "predictedDirection": "up",
+    "action": "Buy",
+    "confidence": "High",
+    "summary": "AI 與資料中心需求仍強，趨勢偏多。 現價變動 1.25。",
+    "technical": [
+      "MFI 持穩，資金面尚未明顯轉差",
+      "AI 與資料中心需求仍強，趨勢偏多。 現價變動 1.25。"
+    ],
+    "sentiment": {
+      "label": "bullish",
+      "items": [
+        "Google AI chips 與 hyperscaler 設計案帶來正面動能"
+      ]
+    },
+    "watchPoints": [
+      "是否站回短期均線",
+      "量能是否放大並延續",
+      "是否突破預測區間上緣"
+    ],
+    "bias": null,
+    "newsImpact": null,
+    "newsSummary": null,
+    "indicators": {
+      "rsi": 66,
+      "mfi": 61,
+      "signal": "強勢"
+    },
+    "marketContext": "watchlist",
+    "source": "railway-api",
+    "targetDate": "Monday",
+    "actualPrice": 164.95,
+    "residual": 0.34,
+    "isCorrect": true
+  },
+  {
+    "prediction_id": "pred_20260502_234942_414486",
+    "symbol": "STX",
+    "companyName": "STX",
+    "predicted_at": "2026-05-02T23:49:42.569122",
+    "currentPrice": 726.0,
+    "predictedLow": 704.22,
+    "predictedHigh": 747.78,
+    "predictedMid": 726.0,
+    "predictedDirection": "up",
+    "action": "Wait",
+    "confidence": "Medium",
+    "summary": "儲存需求穩定，但高位區間震盪。 現價變動 65.7。",
+    "technical": [
+      "MFI 持穩，資金面尚未明顯轉差",
+      "儲存需求穩定，但高位區間震盪。 現價變動 65.7。"
+    ],
+    "sentiment": {
+      "label": "neutral",
+      "items": [
+        "AI 與儲存週期支撐，但追價空間有限"
+      ]
+    },
+    "watchPoints": [
+      "是否站回短期均線",
+      "量能是否放大並延續",
+      "是否突破預測區間上緣"
+    ],
+    "bias": null,
+    "newsImpact": null,
+    "newsSummary": null,
+    "indicators": {
+      "rsi": 58,
+      "mfi": 55,
+      "signal": "中性"
+    },
+    "marketContext": "watchlist",
+    "source": "railway-api",
+    "targetDate": "Monday",
+    "actualPrice": 726.93,
+    "residual": 0.93,
+    "isCorrect": true
+  }
+]

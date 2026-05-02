@@ -1,0 +1,38 @@
+[
+  {
+    "symbol": "TSM",
+    "date": "2026-05-02",
+    "actualOpen": 397.67,
+    "actualHigh": 397.67,
+    "actualLow": 397.67,
+    "actualClose": 397.67,
+    "source": "yfinance"
+  },
+  {
+    "symbol": "NVDA",
+    "date": "2026-05-02",
+    "actualOpen": 198.45,
+    "actualHigh": 198.45,
+    "actualLow": 198.45,
+    "actualClose": 198.45,
+    "source": "yfinance"
+  },
+  {
+    "symbol": "MRVL",
+    "date": "2026-05-02",
+    "actualOpen": 164.95,
+    "actualHigh": 164.95,
+    "actualLow": 164.95,
+    "actualClose": 164.95,
+    "source": "yfinance"
+  },
+  {
+    "symbol": "STX",
+    "date": "2026-05-02",
+    "actualOpen": 726.93,
+    "actualHigh": 726.93,
+    "actualLow": 726.93,
+    "actualClose": 726.93,
+    "source": "yfinance"
+  }
+]

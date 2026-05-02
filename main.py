@@ -12,6 +12,7 @@ import pandas as pd
 import yfinance as yf
 from yahooquery import search as yahoo_search
 from sklearn.metrics import mean_squared_error, r2_score
+import joblib
 
 try:
     from openai import OpenAI
@@ -22,7 +23,9 @@ app = FastAPI()
 BASE_DIR = Path(__file__).resolve().parent
 TW_STOCKS_PATH = BASE_DIR / "tw_stocks.json"
 PREDICTIONS_LOG_PATH = BASE_DIR / "predictions_log.json"
+MODEL_PATH = BASE_DIR / "models" / "price_model.joblib"
 
+_MODEL_CACHE = None
 _TW_STOCKS_CACHE = None
 _TW_STOCKS_INDEX = None
 _WATCHLIST_CACHE = {}
@@ -120,16 +123,136 @@ def _sanitize_analysis_output(symbol: str, data: dict) -> dict:
     return data
 
 
-def _fallback_ai_analysis(payload: AIAnalyzeInput):
-    is_english = str(payload.language or "").lower().startswith("en")
+def _score_action(payload: AIAnalyzeInput) -> tuple[str, int]:
+    score = 50
+    rsi = payload.indicators.rsi
+    mfi = payload.indicators.mfi
     bias = (payload.bias or "").lower()
     news = (payload.newsImpact or "").lower()
-    confidence = (payload.confidence or "medium").capitalize()
-    action = "Wait"
-    if any(word in bias for word in ["down", "bear", "negative"]) or any(word in news for word in ["down", "bear", "negative"]):
-        action = "Avoid" if confidence == "High" else "Wait"
-    elif any(word in bias for word in ["up", "bull", "positive"]) or any(word in news for word in ["up", "bull", "positive"]):
-        action = "Buy" if confidence == "High" else "Wait"
+
+    if rsi is not None:
+        if rsi <= 35:
+            score += 10
+        elif rsi >= 65:
+            score -= 8
+
+    if mfi is not None:
+        if mfi >= 55:
+            score += 8
+        elif mfi < 45:
+            score -= 8
+
+    if any(word in bias for word in ["up", "bull", "positive"]):
+        score += 8
+    elif any(word in bias for word in ["down", "bear", "negative"]):
+        score -= 8
+
+    if any(word in news for word in ["positive", "bull"]):
+        score += 6
+    elif any(word in news for word in ["negative", "bear"]):
+        score -= 6
+
+    score = max(0, min(100, score))
+    if score >= 65:
+        return "Buy", score
+    if score <= 35:
+        return "Avoid", score
+    return "Wait", score
+
+
+def _estimate_range_from_volatility(payload: AIAnalyzeInput, current_price: float | None) -> tuple[float | None, float | None]:
+    if current_price is None:
+        return payload.predictedLow, payload.predictedHigh
+
+    rsi = payload.indicators.rsi or 50
+    mfi = payload.indicators.mfi or 50
+    base_pct = 0.02
+    vol_adjust = 0.01 if abs(rsi - 50) < 10 and abs(mfi - 50) < 10 else 0.015
+    width = base_pct + vol_adjust
+
+    predicted_low = round(current_price * (1 - width), 2)
+    predicted_high = round(current_price * (1 + width), 2)
+    return predicted_low, predicted_high
+
+
+def _load_price_model():
+    global _MODEL_CACHE
+    if _MODEL_CACHE is not None:
+        return _MODEL_CACHE
+    if not MODEL_PATH.exists():
+        _MODEL_CACHE = None
+        return None
+    try:
+        bundle = joblib.load(MODEL_PATH)
+        _MODEL_CACHE = bundle
+        return bundle
+    except Exception:
+        _MODEL_CACHE = None
+        return None
+
+
+def _infer_with_price_model(payload: AIAnalyzeInput):
+    bundle = _load_price_model()
+    if not bundle:
+        return None
+
+    model = bundle.get("model")
+    if model is None:
+        return None
+
+    rsi = _safe_float(payload.indicators.rsi)
+    mfi = _safe_float(payload.indicators.mfi)
+    if rsi is None or mfi is None:
+        return None
+
+    X = pd.DataFrame([[rsi, mfi]], columns=["rsi", "mfi"])
+    predicted_price = float(model.predict(X)[0])
+    current_price = _safe_float(payload.currentPrice)
+
+    if current_price is None:
+        current_price = predicted_price
+
+    deviation = abs(predicted_price - current_price) / max(current_price, 1e-9)
+    confidence_score = int(round(max(0.0, min(1.0, 1.0 - min(deviation / 0.15, 1.0))) * 100))
+    if confidence_score >= 67:
+        action = "Buy"
+    elif confidence_score <= 35:
+        action = "Avoid"
+    else:
+        action = "Wait"
+
+    width = max(abs(predicted_price - current_price) * 0.6, current_price * 0.015)
+    predicted_low = round(predicted_price - width, 2)
+    predicted_high = round(predicted_price + width, 2)
+
+    return {
+        "action": action,
+        "confidence": "High" if confidence_score >= 67 else "Low" if confidence_score <= 35 else "Medium",
+        "predictedLow": predicted_low,
+        "predictedHigh": predicted_high,
+        "summary": f"LinearRegression 預測價約為 {predicted_price:.2f}，信心分數 {confidence_score}。",
+        "technical": [
+            f"模型使用 RSI={rsi:.2f}、MFI={mfi:.2f} 推論價格",
+            f"與現價偏離約 {deviation * 100:.2f}%",
+            "預測區間由模型輸出與偏離幅度共同估計",
+        ],
+        "sentiment": {
+            "label": "neutral",
+            "items": ["此結果來自回歸模型推論，不是固定門檻規則"],
+        },
+        "watchPoints": [
+            "模型預測價是否持續高於現價",
+            "RSI / MFI 是否維持支撐",
+            "後續實際價格是否驗證模型方向",
+        ],
+    }
+
+
+def _fallback_ai_analysis(payload: AIAnalyzeInput):
+    is_english = str(payload.language or "").lower().startswith("en")
+    action, action_score = _score_action(payload)
+    current_price = _safe_float(payload.currentPrice)
+    predicted_low, predicted_high = _estimate_range_from_volatility(payload, current_price)
 
     technical = []
     if payload.indicators.rsi is not None:
@@ -137,19 +260,23 @@ def _fallback_ai_analysis(payload: AIAnalyzeInput):
             technical.append("RSI remains elevated, suggesting short-term overheating pressure" if is_english else "RSI 偏高，短線有過熱壓力")
         elif payload.indicators.rsi <= 30:
             technical.append("RSI is low, so an oversold rebound is worth monitoring" if is_english else "RSI 偏低，留意超跌反彈可能")
-    if payload.indicators.mfi is not None:
-        if payload.indicators.mfi < 50:
-            technical.append("MFI is soft and money flow remains weak" if is_english else "MFI 偏弱，資金動能仍不足")
         else:
-            technical.append("MFI is stable and money flow has not clearly deteriorated" if is_english else "MFI 持穩，資金面尚未明顯轉差")
+            technical.append("RSI is in a neutral zone and should be treated as a supporting feature, not a standalone trigger" if is_english else "RSI 仍在中性區，僅作輔助特徵，不宜單獨決策")
+    if payload.indicators.mfi is not None:
+        if payload.indicators.mfi < 45:
+            technical.append("MFI is soft and money flow remains weak" if is_english else "MFI 偏弱，資金動能仍不足")
+        elif payload.indicators.mfi > 55:
+            technical.append("MFI is firm and money flow is supportive" if is_english else "MFI 偏強，資金面提供支撐")
+        else:
+            technical.append("MFI is balanced and does not provide a strong edge yet" if is_english else "MFI 處於平衡區，尚未提供明確優勢")
     if payload.technicalSummary:
         technical.append(str(payload.technicalSummary).strip())
     technical = technical[:3] or (["No additional technical edge is available right now"] if is_english else ["目前技術面訊號有限，宜保守看待"])
 
     sentiment_label = "neutral"
-    if any(word in news for word in ["positive", "bull"]):
+    if any(word in (payload.newsImpact or "").lower() for word in ["positive", "bull"]):
         sentiment_label = "bullish"
-    elif any(word in news for word in ["negative", "bear"]):
+    elif any(word in (payload.newsImpact or "").lower() for word in ["negative", "bear"]):
         sentiment_label = "bearish"
 
     sentiment_items = []
@@ -158,11 +285,17 @@ def _fallback_ai_analysis(payload: AIAnalyzeInput):
     if not sentiment_items:
         sentiment_items = ["No clear additional edge from current news"] if is_english else ["目前新聞面沒有明顯額外優勢"]
 
+    confidence = "Medium"
+    if action_score >= 70:
+        confidence = "High"
+    elif action_score <= 40:
+        confidence = "Low"
+
     return _sanitize_analysis_output(payload.symbol, {
         "action": action,
-        "confidence": confidence if confidence in ["High", "Medium", "Low"] else "Medium",
-        "predictedLow": payload.predictedLow,
-        "predictedHigh": payload.predictedHigh,
+        "confidence": confidence,
+        "predictedLow": predicted_low,
+        "predictedHigh": predicted_high,
         "summary": payload.technicalSummary or ("Signals are mixed, so waiting for a clearer direction is preferable." if is_english else "短線訊號偏混合，建議先等待更明確方向。"),
         "technical": technical,
         "sentiment": {
@@ -197,7 +330,10 @@ def ai_logs(limit: int = Query(0, ge=0, le=10000), symbol: str | None = Query(No
 @app.post("/api/ai/analyze")
 def ai_analyze(payload: AIAnalyzeInput):
     api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key or OpenAI is None:
+    model_result = _infer_with_price_model(payload)
+    if model_result is not None:
+        result = _sanitize_analysis_output(payload.symbol, model_result)
+    elif not api_key or OpenAI is None:
         result = _fallback_ai_analysis(payload)
     else:
         try:
@@ -227,18 +363,15 @@ def ai_analyze(payload: AIAnalyzeInput):
     elif predicted_high is not None:
         predicted_mid = predicted_high
 
-    actual_price = current_price
     residual = None
-    if actual_price is not None and predicted_mid is not None:
-        residual = round(actual_price - predicted_mid, 4)
-
     predicted_direction = None
     actual_direction = None
     is_correct = None
     if current_price is not None and predicted_mid is not None:
+        residual = round(current_price - predicted_mid, 4)
         predicted_direction = "up" if predicted_mid >= current_price else "down"
-        actual_direction = "up" if actual_price >= current_price else "down"
-        is_correct = predicted_direction == actual_direction
+        actual_direction = None
+        is_correct = None
 
     log_entry = {
         "prediction_id": f"pred_{datetime.now(ZoneInfo('Asia/Taipei')).strftime('%Y%m%d_%H%M%S_%f')}",
@@ -250,7 +383,7 @@ def ai_analyze(payload: AIAnalyzeInput):
         "predictedLow": predicted_low,
         "predictedHigh": predicted_high,
         "predictedMid": round(predicted_mid, 4) if predicted_mid is not None else None,
-        "actualPrice": actual_price,
+        "actualPrice": None,
         "residual": residual,
         "predictedDirection": predicted_direction,
         "actualDirection": actual_direction,
@@ -268,7 +401,7 @@ def ai_analyze(payload: AIAnalyzeInput):
     return {
         **result,
         "currentPrice": current_price,
-        "actualPrice": actual_price,
+        "actualPrice": None,
         "predictedMid": round(predicted_mid, 4) if predicted_mid is not None else None,
         "residual": residual,
         "predictedDirection": predicted_direction,
