@@ -22,7 +22,7 @@ except ImportError:
 app = FastAPI()
 BASE_DIR = Path(__file__).resolve().parent
 TW_STOCKS_PATH = BASE_DIR / "tw_stocks.json"
-PREDICTIONS_LOG_PATH = BASE_DIR / "predictions_log.json"
+PREDICTIONS_LOG_PATH = BASE_DIR / "watchlist_predictions.json"
 MODEL_PATH = BASE_DIR / "models" / "price_model.joblib"
 
 _MODEL_CACHE = None
