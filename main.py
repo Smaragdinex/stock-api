@@ -181,6 +181,19 @@ def _fallback_ai_analysis(payload: AIAnalyzeInput):
     })
 
 
+@app.get("/api/ai/logs")
+def ai_logs(limit: int = Query(0, ge=0, le=10000), symbol: str | None = Query(None)):
+    logs = _load_predictions_log()
+    if symbol:
+        logs = [entry for entry in logs if str(entry.get("symbol", "")).upper() == symbol.upper()]
+    if limit and limit > 0:
+        logs = logs[-limit:]
+    return {
+        "count": len(logs),
+        "items": logs,
+    }
+
+
 @app.post("/api/ai/analyze")
 def ai_analyze(payload: AIAnalyzeInput):
     api_key = os.getenv("OPENAI_API_KEY")
