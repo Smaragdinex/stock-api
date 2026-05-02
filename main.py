@@ -11,6 +11,7 @@ import os
 import pandas as pd
 import yfinance as yf
 from yahooquery import search as yahoo_search
+from sklearn.metrics import mean_squared_error, r2_score
 
 try:
     from openai import OpenAI
@@ -20,6 +21,7 @@ except ImportError:
 app = FastAPI()
 BASE_DIR = Path(__file__).resolve().parent
 TW_STOCKS_PATH = BASE_DIR / "tw_stocks.json"
+PREDICTIONS_LOG_PATH = BASE_DIR / "predictions_log.json"
 
 _TW_STOCKS_CACHE = None
 _TW_STOCKS_INDEX = None
@@ -183,23 +185,84 @@ def _fallback_ai_analysis(payload: AIAnalyzeInput):
 def ai_analyze(payload: AIAnalyzeInput):
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key or OpenAI is None:
-        return _fallback_ai_analysis(payload)
+        result = _fallback_ai_analysis(payload)
+    else:
+        try:
+            client = OpenAI(api_key=api_key)
+            user_prompt = json.dumps(payload.model_dump(), ensure_ascii=False)
+            response = client.responses.create(
+                model=os.getenv("OPENAI_MODEL", "gpt-4.1"),
+                temperature=0.2,
+                input=[
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": user_prompt},
+                ],
+            )
+            text = response.output_text
+            result = _sanitize_analysis_output(payload.symbol, json.loads(text))
+        except Exception:
+            result = _fallback_ai_analysis(payload)
 
-    try:
-        client = OpenAI(api_key=api_key)
-        user_prompt = json.dumps(payload.model_dump(), ensure_ascii=False)
-        response = client.responses.create(
-            model=os.getenv("OPENAI_MODEL", "gpt-4.1"),
-            temperature=0.2,
-            input=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": user_prompt},
-            ],
-        )
-        text = response.output_text
-        return _sanitize_analysis_output(payload.symbol, json.loads(text))
-    except Exception:
-        return _fallback_ai_analysis(payload)
+    current_price = _safe_float(payload.currentPrice)
+    predicted_low = _safe_float(result.get("predictedLow"))
+    predicted_high = _safe_float(result.get("predictedHigh"))
+    predicted_mid = None
+    if predicted_low is not None and predicted_high is not None:
+        predicted_mid = (predicted_low + predicted_high) / 2
+    elif predicted_low is not None:
+        predicted_mid = predicted_low
+    elif predicted_high is not None:
+        predicted_mid = predicted_high
+
+    actual_price = current_price
+    residual = None
+    if actual_price is not None and predicted_mid is not None:
+        residual = round(actual_price - predicted_mid, 4)
+
+    predicted_direction = None
+    actual_direction = None
+    is_correct = None
+    if current_price is not None and predicted_mid is not None:
+        predicted_direction = "up" if predicted_mid >= current_price else "down"
+        actual_direction = "up" if actual_price >= current_price else "down"
+        is_correct = predicted_direction == actual_direction
+
+    log_entry = {
+        "prediction_id": f"pred_{datetime.now(ZoneInfo('Asia/Taipei')).strftime('%Y%m%d_%H%M%S_%f')}",
+        "symbol": payload.symbol.upper(),
+        "companyName": payload.companyName,
+        "model_version": os.getenv("OPENAI_MODEL", "gpt-4.1") if api_key and OpenAI is not None else "fallback",
+        "predicted_at": datetime.now(ZoneInfo('Asia/Taipei')).isoformat(),
+        "currentPrice": current_price,
+        "predictedLow": predicted_low,
+        "predictedHigh": predicted_high,
+        "predictedMid": round(predicted_mid, 4) if predicted_mid is not None else None,
+        "actualPrice": actual_price,
+        "residual": residual,
+        "predictedDirection": predicted_direction,
+        "actualDirection": actual_direction,
+        "isCorrect": is_correct,
+        "confidence": result.get("confidence"),
+        "bias": result.get("bias"),
+        "summary": result.get("summary"),
+        "newsImpact": result.get("newsImpact"),
+        "newsSummary": result.get("newsSummary"),
+        "indicators": payload.indicators.model_dump(),
+        "marketContext": payload.marketContext,
+    }
+    _append_predictions_log(log_entry)
+
+    return {
+        **result,
+        "currentPrice": current_price,
+        "actualPrice": actual_price,
+        "predictedMid": round(predicted_mid, 4) if predicted_mid is not None else None,
+        "residual": residual,
+        "predictedDirection": predicted_direction,
+        "actualDirection": actual_direction,
+        "isCorrect": is_correct,
+        "predictionId": log_entry["prediction_id"],
+    }
 
 
 def _safe_float(value):
@@ -207,6 +270,24 @@ def _safe_float(value):
         return float(value) if value is not None else None
     except Exception:
         return None
+
+
+def _load_predictions_log():
+    if not PREDICTIONS_LOG_PATH.exists():
+        PREDICTIONS_LOG_PATH.write_text("[]", encoding="utf-8")
+        return []
+
+    try:
+        data = json.loads(PREDICTIONS_LOG_PATH.read_text(encoding="utf-8"))
+        return data if isinstance(data, list) else []
+    except Exception:
+        return []
+
+
+def _append_predictions_log(entry: dict):
+    log = _load_predictions_log()
+    log.append(entry)
+    PREDICTIONS_LOG_PATH.write_text(json.dumps(log, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def _load_tw_stocks():
