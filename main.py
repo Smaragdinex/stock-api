@@ -329,28 +329,14 @@ def ai_logs(limit: int = Query(0, ge=0, le=10000), symbol: str | None = Query(No
 
 @app.post("/api/ai/analyze")
 def ai_analyze(payload: AIAnalyzeInput):
-    api_key = os.getenv("OPENAI_API_KEY")
-    model_result = _infer_with_price_model(payload)
-    if model_result is not None:
-        result = _sanitize_analysis_output(payload.symbol, model_result)
-    elif not api_key or OpenAI is None:
-        result = _fallback_ai_analysis(payload)
-    else:
-        try:
-            client = OpenAI(api_key=api_key)
-            user_prompt = json.dumps(payload.model_dump(), ensure_ascii=False)
-            response = client.responses.create(
-                model=os.getenv("OPENAI_MODEL", "gpt-4.1"),
-                temperature=0.2,
-                input=[
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": user_prompt},
-                ],
-            )
-            text = response.output_text
-            result = _sanitize_analysis_output(payload.symbol, json.loads(text))
-        except Exception:
+    try:
+        model_result = _infer_with_price_model(payload)
+        if model_result is not None:
+            result = _sanitize_analysis_output(payload.symbol, model_result)
+        else:
             result = _fallback_ai_analysis(payload)
+    except Exception:
+        result = _fallback_ai_analysis(payload)
 
     current_price = _safe_float(payload.currentPrice)
     predicted_low = _safe_float(result.get("predictedLow"))
